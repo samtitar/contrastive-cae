@@ -1,0 +1,11 @@
+name: cae-contrastive
+channels:
+  - defaults
+dependencies:
+  - torchvision
+  - pytorch
+  - pytorch-cuda=11.6
+  - matplotlib
+  - pip:
+    - einops
+    - wandb
