@@ -19,51 +19,51 @@ Complex Valued Autoencoders for Object Discovery
 
 ---
 ### MNIST & Shape
-| ![height:3in](assets/mnist_s.jpg) | ![height:3in](assets/mnist_r.jpg) | ![height:3in](assets/mnist_c.jpg) |
+| ![height:3in width:3in](assets/mnist_s.jpg) | ![height:3in width:3in](assets/mnist_r.jpg) | ![height:3in width:3in](assets/mnist_c.jpg) |
 | :---: | :---: | :---: |
-| Sample | Reconstruction |Phases |
+| Sample | Reconstruction | Phases |
 
 ---
 ### MNIST & Shape
-| ![height:3in](assets/mnist_s.jpg) | ![height:3in](assets/mnist_p.jpg) | ![height:3in](assets/mnist_c.jpg) |
+| ![height:3in width:3in](assets/mnist_s.jpg) | ![height:3in width:3in](assets/mnist_p.jpg) | ![height:3in width:3in](assets/mnist_c.jpg) |
 | :---: | :---: | :---: |
-| Sample | Phases | Polar |
+| Sample | Polar | Phases |
 
 ---
 ### CIFAR100 Example 1
-| ![height:3in](assets/cifar1_s.jpg) | ![height:3in](assets/cifar1_r.jpg) | ![height:3in](assets/cifar1_c.jpg) |
+| ![height:3in width:3in](assets/cifar1_s.jpg) | ![height:3in width:3in](assets/cifar1_r.jpg) | ![height:3in width:3in](assets/cifar1_c.jpg) |
 | :---: | :---: | :---: |
 | Sample | Reconstruction | Phases |
 
 ---
 ### CIFAR100 Example 1
-| ![height:3in](assets/cifar1_s.jpg) | ![height:3in](assets/cifar1_p.jpg) | ![height:3in](assets/cifar1_c.jpg) |
+| ![height:3in width:3in](assets/cifar1_s.jpg) | ![height:3in width:3in](assets/cifar1_p.jpg) | ![height:3in width:3in](assets/cifar1_c.jpg) |
 | :---: | :---: | :---: |
-| Sample | Phases | Polar |
+| Sample | Polar | Phases |
 
 ---
 ### CIFAR100 Example 2
-| ![height:3in](assets/cifar2_s.jpg) | ![height:3in](assets/cifar2_r.jpg) | ![height:3in](assets/cifar2_c.jpg) |
+| ![height:3in width:3in](assets/cifar2_s.jpg) | ![height:3in width:3in](assets/cifar2_r.jpg) | ![height:3in width:3in](assets/cifar2_c.jpg) |
 | :---: | :---: | :---: |
 | Sample | Reconstruction | Phases |
 
 ---
 ### CIFAR100 Example 2
-| ![height:3in](assets/cifar2_s.jpg) | ![height:3in](assets/cifar2_p.jpg) | ![height:3in](assets/cifar2_c.jpg) |
+| ![height:3in width:3in](assets/cifar2_s.jpg) | ![height:3in width:3in](assets/cifar2_p.jpg) | ![height:3in width:3in](assets/cifar2_c.jpg) |
 | :---: | :---: | :---: |
-| Sample | Phases | Polar |
+| Sample | Polar | Phases |
 
 ---
 ### ImageNet
-| ![height:3in](assets/imagenet_s.jpg) | ![height:3in](assets/imagenet_r.jpg) | ![height:3in](assets/imagenet_c.jpg) |
+| ![height:3in width:3in](assets/imagenet_s.jpg) | ![height:3in width:3in](assets/imagenet_r.jpg) | ![height:3in width:3in](assets/imagenet_c.jpg) |
 | :---: | :---: | :---: |
 | Sample | Reconstruction | Phases |
 
 ---
 ### ImageNet
-| ![height:3in](assets/imagenet_s.jpg) | ![height:3in](assets/imagenet_p.jpg) | ![height:3in](assets/imagenet_c.jpg) |
+| ![height:3in width:3in](assets/imagenet_s.jpg) | ![height:3in width:3in](assets/imagenet_p.jpg) | ![height:3in width:3in](assets/imagenet_c.jpg) |
 | :---: | :---: | :---: |
-| Sample | Phases | Polar |
+| Sample | Polar | Phases |
 
 ---
 ### Challenges
