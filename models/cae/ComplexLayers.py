@@ -2,6 +2,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def apply_layer(real_function, phase_bias, magnitude_bias, x):
@@ -231,3 +232,54 @@ class ComplexSequential(nn.Sequential):
             else:
                 inputs = module(inputs)
         return inputs
+
+
+class ComplexMaxPool2d(nn.Module):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=1):
+        super(ComplexMaxPool2d, self).__init__()
+
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+
+    def forward(self, x):
+        _, index = F.max_pool2d(
+            x.abs(),
+            self.kernel_size,
+            self.stride,
+            self.padding,
+            self.dilation,
+            return_indices=True,
+        )
+
+        index = index.long()
+
+        return (
+            x.flatten(start_dim=2)
+            .gather(dim=2, index=index.flatten(start_dim=2))
+            .view_as(index),
+            index,
+        )
+
+
+class ComplexMaxUnpool2d(nn.Module):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=1):
+        super(ComplexMaxUnpool2d, self).__init__()
+
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+
+    def forward(self, x, index, out_shape):
+        b, c = x.shape[:2]
+
+        x = x.flatten(start_dim=2)
+        index = index.flatten(start_dim=2)
+
+        empty = torch.zeros((b, c, out_shape[0] * out_shape[1])).to(x.device).cfloat()
+
+        return empty.scatter_(dim=2, index=index, src=x).view(
+            b, c, out_shape[0], out_shape[1]
+        )
