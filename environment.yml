@@ -5,10 +5,10 @@ dependencies:
   - torchvision
   - pytorch
   - tqdm
-  - pytorch-cuda=11.6
   - matplotlib
   - scipy
   - pip:
     - einops
     - wandb
     - torchmetrics
+    - argparse

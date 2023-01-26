@@ -12,11 +12,11 @@ from data_utils.transforms import RandomResizedCrop, resize_boxes
 from torchmetrics.functional import pairwise_cosine_similarity as pcs
 
 LOG_FREQUENCY = 250
-PBATCH_SIZE = 32
+PBATCH_SIZE = 4
 IMG_SIZE = 224
 
 
-def pre_train_epoch(model, dataloader, optimizer, device, epoch, logger):
+def pre_train_epoch(model, dataloader, optimizer, device, epoch, logger=None):
     running_loss, n_div = 0, 0
 
     for step, (x, y) in enumerate(tqdm(dataloader)):
@@ -32,7 +32,7 @@ def pre_train_epoch(model, dataloader, optimizer, device, epoch, logger):
         running_loss += loss.item()
         n_div += 1
 
-        if step % LOG_FREQUENCY == 0:
+        if logger != None and step % LOG_FREQUENCY == 0:
             img_s, img_c, img_r, img_p = plot(
                 x, reconstruction, complex_out, logger.Image
             )
@@ -73,7 +73,8 @@ def dis_train_epoch(model, dataloader, optimizer, device, epoch, logger):
 
             # Obtain features for each patch
             complex_latent_l, _, _ = model(x_l)
-            features_l = complex_latent_l.abs()
+            features_l = complex_latent_l.abs().flatten(start_dim=1)
+            print(features_l.shape)
 
             # Compute similarities between features of each patch
             similarities = pcs(features_l, zero_diagonal=False) > 0.5
