@@ -6,6 +6,22 @@ from einops import rearrange
 from models.cae import ComplexLayers
 
 
+class ComplexLin(nn.Module):
+    def __init__(self, in_channel, out_channel):
+        super().__init__()
+
+        self.linear = ComplexLayers.ComplexLinear(in_channel, out_channel)
+        self.layernorm = ComplexLayers.ComplexLayerNorm(out_channel)
+        self.relu = ComplexLayers.ComplexReLU()
+        self.collapse = ComplexLayers.ComplexCollapse()
+
+    def forward(self, x):
+        m, p = self.linear(x)
+        m, p = self.layernorm(m, p)
+        m, p = self.relu(m, p)
+        return self.collapse(m, p)
+
+
 class ComplexConv(nn.Module):
     def __init__(self, in_channel, out_channel, kernel_size, stride, padding):
         super().__init__()
@@ -89,7 +105,7 @@ class ComplexConvUBlock3(nn.Module):
 
 
 class ComplexAutoEncoder(nn.Module):
-    def __init__(self, in_channel):
+    def __init__(self, in_channel, in_height, in_width):
         super(ComplexAutoEncoder, self).__init__()
 
         self.collapse = ComplexLayers.ComplexCollapse()
@@ -98,15 +114,32 @@ class ComplexAutoEncoder(nn.Module):
         self.down2 = ComplexConvDBlock2(64, 128)
         self.down3 = ComplexConvDBlock3(128, 256)
         self.down4 = ComplexConvDBlock3(256, 512)
-        self.down5 = ComplexConvDBlock3(512, 512)
+        self.down5 = ComplexConvDBlock3(512, 1024)
 
-        self.up5 = ComplexConvUBlock3(512, 512)
+        self.up5 = ComplexConvUBlock3(1024, 512)
         self.up4 = ComplexConvUBlock3(512, 256)
         self.up3 = ComplexConvUBlock3(256, 128)
         self.up2 = ComplexConvUBlock3(128, 64)
         self.up1 = ComplexConvUBlock3(64, in_channel)
 
         self.output_model = nn.Conv2d(in_channel, in_channel, 1, 1)
+
+        def compute_feature_size():
+            x = torch.zeros(1, 1, in_height, in_width)
+            complex_input = self.collapse(x, torch.zeros_like(x))
+
+            z, idx1, shape1 = self.down1(complex_input)
+            z, idx2, shape2 = self.down2(z)
+            z, idx3, shape3 = self.down3(z)
+            z, idx4, shape4 = self.down4(z)
+            z, idx5, shape5 = self.down5(z)
+
+            return z.shape[2], z.shape[3]
+
+        feature_h, feature_w = compute_feature_size()
+
+        self.linear1 = ComplexLin(feature_h * feature_w, 2048)
+        self.linear2 = ComplexLin(2048, feature_h * feature_w)
 
         self._init_output_model()
 
@@ -121,9 +154,15 @@ class ComplexAutoEncoder(nn.Module):
         z, idx2, shape2 = self.down2(z)
         z, idx3, shape3 = self.down3(z)
         z, idx4, shape4 = self.down4(z)
-        complex_latent, idx5, shape5 = self.down5(z)
+        z, idx5, shape5 = self.down5(z)
 
-        z = self.up5(complex_latent, idx5, shape5)
+        z_shape = z.shape
+        z = z.flatten(start_dim=2)
+        complex_latent = self.linear1(z)
+        z = self.linear2(complex_latent)
+        z = z.view(z_shape)
+
+        z = self.up5(z, idx5, shape5)
         z = self.up4(z, idx4, shape4)
         z = self.up3(z, idx3, shape3)
         z = self.up2(z, idx2, shape2)
