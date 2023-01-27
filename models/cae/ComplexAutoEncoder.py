@@ -108,15 +108,19 @@ class ComplexAutoEncoder(nn.Module):
     def __init__(self, in_channel, in_height, in_width):
         super(ComplexAutoEncoder, self).__init__()
 
+        self.in_channel = in_channel
+        self.in_height = in_height
+        self.in_width = in_width
+
         self.collapse = ComplexLayers.ComplexCollapse()
 
         self.down1 = ComplexConvDBlock2(in_channel, 64)
         self.down2 = ComplexConvDBlock2(64, 128)
         self.down3 = ComplexConvDBlock3(128, 256)
         self.down4 = ComplexConvDBlock3(256, 512)
-        self.down5 = ComplexConvDBlock3(512, 1024)
+        self.down5 = ComplexConvDBlock3(512, 512)
 
-        self.up5 = ComplexConvUBlock3(1024, 512)
+        self.up5 = ComplexConvUBlock3(512, 512)
         self.up4 = ComplexConvUBlock3(512, 256)
         self.up3 = ComplexConvUBlock3(256, 128)
         self.up2 = ComplexConvUBlock3(128, 64)
@@ -134,12 +138,12 @@ class ComplexAutoEncoder(nn.Module):
             z, idx4, shape4 = self.down4(z)
             z, idx5, shape5 = self.down5(z)
 
-            return z.shape[2], z.shape[3]
+            return z.shape[1], z.shape[2], z.shape[3]
 
-        feature_h, feature_w = compute_feature_size()
+        feature_c, feature_h, feature_w = compute_feature_size()
 
-        self.linear1 = ComplexLin(feature_h * feature_w, 2048)
-        self.linear2 = ComplexLin(2048, feature_h * feature_w)
+        self.linear1 = ComplexLin(feature_c * feature_h * feature_w, 2048)
+        self.linear2 = ComplexLin(2048, feature_c * feature_h * feature_w)
 
         self._init_output_model()
 
@@ -150,6 +154,8 @@ class ComplexAutoEncoder(nn.Module):
     def forward(self, x):
         complex_input = self.collapse(x, torch.zeros_like(x))
 
+        print(x.shape)
+
         z, idx1, shape1 = self.down1(complex_input)
         z, idx2, shape2 = self.down2(z)
         z, idx3, shape3 = self.down3(z)
@@ -157,7 +163,7 @@ class ComplexAutoEncoder(nn.Module):
         z, idx5, shape5 = self.down5(z)
 
         z_shape = z.shape
-        z = z.flatten(start_dim=2)
+        z = z.flatten(start_dim=1)
         complex_latent = self.linear1(z)
         z = self.linear2(complex_latent)
         z = z.view(z_shape)

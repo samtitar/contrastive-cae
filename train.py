@@ -9,7 +9,6 @@ import torchvision
 
 from engine import pre_train_epoch, dis_train_epoch
 
-from data_utils import transforms
 from data_utils.datasets import NpzDataset
 from models.cae.ComplexAutoEncoder import ComplexAutoEncoder
 
@@ -57,6 +56,7 @@ if __name__ == "__main__":
         import wandb
 
         wandb.init(project=args.wandb_project, entity=args.wandb_entity)
+        logger = wandb
 
     device = torch.device(args.device)
 
@@ -70,30 +70,26 @@ if __name__ == "__main__":
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
+    transforms_list = [torchvision.transforms.ToTensor()]
+
+    if args.image_channels == 1:
+        transforms_list.append(torchvision.transforms.Grayscale())
+
     if args.training_type == "pre":
-        transforms = torchvision.transforms.Compose(
-            [
-                torchvision.transforms.ToTensor(),
-                torchvision.transforms.Grayscale(),
-                torchvision.transforms.RandomChoice(
-                    [
-                        torchvision.transforms.RandomResizedCrop(
-                            (args.image_height, args.image_width), ratio=(0.01, 2)
-                        ),
-                        torchvision.transforms.Resize(
-                            (args.image_height, args.image_width)
-                        ),
-                    ]
-                ),
-            ]
+        transforms_list.append(
+            torchvision.transforms.RandomChoice(
+                [
+                    torchvision.transforms.RandomResizedCrop(
+                        (args.image_height, args.image_width), ratio=(0.01, 2)
+                    ),
+                    torchvision.transforms.Resize(
+                        (args.image_height, args.image_width)
+                    ),
+                ]
+            ),
         )
-    elif args.training_type == "dis":
-        transforms = torchvision.transforms.Compose(
-            [
-                torchvision.transforms.ToTensor(),
-                torchvision.transforms.Grayscale(),
-            ]
-        )
+
+    transforms = torchvision.transforms.Compose(transforms_list)
 
     dataset = getattr(torchvision.datasets, args.dataset)(
         root=args.dataset_root, transform=transforms
