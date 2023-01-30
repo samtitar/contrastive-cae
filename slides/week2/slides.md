@@ -66,6 +66,19 @@ Complex Valued Autoencoders for Object Discovery
 
 ---
 
+### Additional Research
+
+- FreeSOLO
+    - FreeMask: Coarse mask extraction using learned features
+    - SOLO refinment using self-training
+        - Weak supervision loss on coarse masks
+- CutLER
+    - Very recent (few days ago) - still reading
+    - ViT ⟶ MaskCut ⟶ Detector (self-training)
+        - MaskCut outperforms FreeMask
+
+---
+
 # Next up
 
 <style>
