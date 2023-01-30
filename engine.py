@@ -60,7 +60,7 @@ def dis_train_epoch(model, dataloader, optimizer, device, epoch, logger=None):
 
         for patch_idx in range(5):
             # Compute initial object assignments on "global" image
-            _, _, complex_out_g = model(x_g)
+            _, reconstruction, complex_out_g = model(x_g)
 
             # Divide image into randomly sampled "local" patches
             boxes, x_l = list(zip(*[rrc(x[0]) for _ in range(PBATCH_SIZE)]))
@@ -117,6 +117,8 @@ def dis_train_epoch(model, dataloader, optimizer, device, epoch, logger=None):
             loss = polar_distance_loss(
                 complex_out_g[0, 0].angle(), boxes, similarities.to(device)
             )
+
+            loss += 0.5 * F.binary_cross_entropy(reconstruction, x_g)
 
             loss.backward()
 
