@@ -99,6 +99,8 @@ if __name__ == "__main__":
     g = torch.Generator()
     g.manual_seed(42)
 
+    torch.manual_seed(42)
+
     def seed_worker(worker_id):
         worker_seed = torch.initial_seed() % 2**32
         np.random.seed(worker_seed)
