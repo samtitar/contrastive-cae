@@ -128,7 +128,7 @@ def dis_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
             # # -------------------------------------- PLOTTING ----------------
 
             loss = polar_distance_loss(
-                complex_out_g[0, 0].angle(), boxes, similarities.to(device)
+                complex_out_g[0, 0].angle(), boxes, similarities.to(device) > 0.5
             ) + F.binary_cross_entropy(reconstruction_g, x_g)
             loss.backward()
 
