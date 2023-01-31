@@ -7,11 +7,11 @@ from models.cae import ComplexLayers
 
 
 class ComplexLin(nn.Module):
-    def __init__(self, in_channel, out_channel):
+    def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
 
-        self.linear = ComplexLayers.ComplexLinear(in_channel, out_channel)
-        self.layernorm = ComplexLayers.ComplexLayerNorm(out_channel)
+        self.linear = ComplexLayers.ComplexLinear(in_channels, out_channels)
+        self.layernorm = ComplexLayers.ComplexLayerNorm(out_channels)
         self.relu = ComplexLayers.ComplexReLU()
         self.collapse = ComplexLayers.ComplexCollapse()
 
@@ -23,18 +23,25 @@ class ComplexLin(nn.Module):
 
 
 class ComplexConv(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel_size, stride, padding):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int = 3,
+        stride: int = 1,
+        padding: int = 0,
+    ):
         super().__init__()
 
         self.conv = ComplexLayers.ComplexConv2d(
-            in_channel,
-            out_channel,
+            in_channels,
+            out_channels,
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
         )
 
-        self.batchnorm = ComplexLayers.ComplexBatchNorm2d(out_channel)
+        self.batchnorm = ComplexLayers.ComplexBatchNorm2d(out_channels)
         self.relu = ComplexLayers.ComplexReLU()
         self.collapse = ComplexLayers.ComplexCollapse()
 
@@ -46,11 +53,11 @@ class ComplexConv(nn.Module):
 
 
 class ComplexConvDBlock2(nn.Module):
-    def __init__(self, in_channel, out_channel):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
 
-        self.conv1 = ComplexConv(in_channel, out_channel, 3, 1, 1)
-        self.conv2 = ComplexConv(out_channel, out_channel, 3, 1, 1)
+        self.conv1 = ComplexConv(in_channels, out_channels, 3, 1, 1)
+        self.conv2 = ComplexConv(out_channels, out_channels, 3, 1, 1)
         self.maxpool = ComplexLayers.ComplexMaxPool2d((2, 2))
 
     def forward(self, x):
@@ -60,12 +67,12 @@ class ComplexConvDBlock2(nn.Module):
 
 
 class ComplexConvDBlock3(nn.Module):
-    def __init__(self, in_channel, out_channel):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
 
-        self.conv1 = ComplexConv(in_channel, out_channel, 3, 1, 1)
-        self.conv2 = ComplexConv(out_channel, out_channel, 3, 1, 1)
-        self.conv3 = ComplexConv(out_channel, out_channel, 3, 1, 1)
+        self.conv1 = ComplexConv(in_channels, out_channels, 3, 1, 1)
+        self.conv2 = ComplexConv(out_channels, out_channels, 3, 1, 1)
+        self.conv3 = ComplexConv(out_channels, out_channels, 3, 1, 1)
         self.maxpool = ComplexLayers.ComplexMaxPool2d((2, 2))
 
     def forward(self, x):
@@ -75,12 +82,12 @@ class ComplexConvDBlock3(nn.Module):
 
 
 class ComplexConvUBlock2(nn.Module):
-    def __init__(self, in_channel, out_channel):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
 
-        self.maxpool = ComplexLayers.ComplexMaxUnpool2d((2, 2))
-        self.conv1 = ComplexConv(in_channel, out_channel, 3, 1, 1)
-        self.conv2 = ComplexConv(out_channel, out_channel, 3, 1, 1)
+        self.maxpool = ComplexLayers.ComplexMaxUnpool2d()
+        self.conv1 = ComplexConv(in_channels, out_channels, 3, 1, 1)
+        self.conv2 = ComplexConv(out_channels, out_channels, 3, 1, 1)
 
     def forward(self, x, indices, out_shape):
         z = self.maxpool(x, indices, out_shape)
@@ -89,13 +96,13 @@ class ComplexConvUBlock2(nn.Module):
 
 
 class ComplexConvUBlock3(nn.Module):
-    def __init__(self, in_channel, out_channel):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
 
-        self.maxpool = ComplexLayers.ComplexMaxUnpool2d((2, 2))
-        self.conv1 = ComplexConv(in_channel, out_channel, 3, 1, 1)
-        self.conv2 = ComplexConv(out_channel, out_channel, 3, 1, 1)
-        self.conv3 = ComplexConv(out_channel, out_channel, 3, 1, 1)
+        self.maxpool = ComplexLayers.ComplexMaxUnpool2d()
+        self.conv1 = ComplexConv(in_channels, out_channels, 3, 1, 1)
+        self.conv2 = ComplexConv(out_channels, out_channels, 3, 1, 1)
+        self.conv3 = ComplexConv(out_channels, out_channels, 3, 1, 1)
 
     def forward(self, x, indices, out_shape):
         z = self.maxpool(x, indices, out_shape)
@@ -105,16 +112,22 @@ class ComplexConvUBlock3(nn.Module):
 
 
 class ComplexAutoEncoder(nn.Module):
-    def __init__(self, in_channel, in_height, in_width, num_features):
+    def __init__(
+        self,
+        in_channels: int = 3,
+        in_height: int = 224,
+        in_width: int = 224,
+        num_features: int = 1024,
+    ):
         super(ComplexAutoEncoder, self).__init__()
 
-        self.in_channel = in_channel
+        self.in_channels = in_channels
         self.in_height = in_height
         self.in_width = in_width
 
         self.collapse = ComplexLayers.ComplexCollapse()
 
-        self.down1 = ComplexConvDBlock2(in_channel, 64)
+        self.down1 = ComplexConvDBlock2(in_channels, 64)
         self.down2 = ComplexConvDBlock2(64, 128)
         self.down3 = ComplexConvDBlock3(128, 256)
         self.down4 = ComplexConvDBlock3(256, 512)
@@ -124,9 +137,9 @@ class ComplexAutoEncoder(nn.Module):
         self.up4 = ComplexConvUBlock3(512, 256)
         self.up3 = ComplexConvUBlock3(256, 128)
         self.up2 = ComplexConvUBlock3(128, 64)
-        self.up1 = ComplexConvUBlock3(64, in_channel)
+        self.up1 = ComplexConvUBlock3(64, in_channels)
 
-        self.output_model = nn.Conv2d(in_channel, in_channel, 1, 1)
+        self.output_model = nn.Conv2d(in_channels, in_channels, 1, 1)
 
         def compute_feature_size():
             x = torch.zeros(1, 1, in_height, in_width)

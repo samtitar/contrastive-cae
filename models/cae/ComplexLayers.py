@@ -96,7 +96,7 @@ def complex_tensor_to_real(complex_tensor, dim=-1):
     return torch.stack([complex_tensor.real, complex_tensor.imag], dim=dim)
 
 
-def stable_angle(x: torch.tensor, eps=1e-8):
+def stable_angle(x, eps=1e-8):
     """Function to ensure that the gradients of .angle() are well behaved."""
     imag = x.imag
     y = x.clone()
@@ -107,22 +107,22 @@ def stable_angle(x: torch.tensor, eps=1e-8):
 class ComplexConvTranspose2d(nn.Module):
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        kernel_size,
-        stride=1,
-        padding=0,
-        output_padding=0,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int = 3,
+        stride: int = 1,
+        padding: int = 0,
+        output_padding: int = 0,
     ):
         super(ComplexConvTranspose2d, self).__init__()
 
         self.conv_tran = nn.ConvTranspose2d(
             in_channels,
             out_channels,
-            kernel_size,
-            stride,
-            padding,
-            output_padding,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            output_padding=output_padding,
             bias=False,
         )
 
@@ -130,27 +130,27 @@ class ComplexConvTranspose2d(nn.Module):
         fan_in = out_channels * self.kernel_size[0] * self.kernel_size[1]
         self.magnitude_bias, self.phase_bias = get_conv_biases(out_channels, fan_in)
 
-    def forward(self, x):
+    def forward(self, x: torch.cfloat):
         return apply_layer(self.conv_tran, self.phase_bias, self.magnitude_bias, x)
 
 
 class ComplexConv2d(nn.Module):
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        kernel_size=3,
-        stride=1,
-        padding=0,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int = 3,
+        stride: int = 1,
+        padding: int = 0,
     ):
         super(ComplexConv2d, self).__init__()
 
         self.conv = nn.Conv2d(
             in_channels,
             out_channels,
-            kernel_size,
-            stride,
-            padding,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
             bias=False,
         )
 
@@ -158,12 +158,12 @@ class ComplexConv2d(nn.Module):
         fan_in = in_channels * self.kernel_size[0] * self.kernel_size[1]
         self.magnitude_bias, self.phase_bias = get_conv_biases(out_channels, fan_in)
 
-    def forward(self, x):
+    def forward(self, x: torch.cfloat):
         return apply_layer(self.conv, self.phase_bias, self.magnitude_bias, x)
 
 
 class ComplexLinear(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels: int, out_channels: int):
         super(ComplexLinear, self).__init__()
 
         self.fc = nn.Linear(in_channels, out_channels, bias=False)
@@ -181,28 +181,28 @@ class ComplexLinear(nn.Module):
         phase_bias = init_phase_bias(phase_bias)
         return magnitude_bias, phase_bias
 
-    def forward(self, x):
+    def forward(self, x: torch.cfloat):
         return apply_layer(self.fc, self.phase_bias, self.magnitude_bias, x)
 
 
 class ComplexBatchNorm2d(nn.Module):
-    def __init__(self, in_channel):
+    def __init__(self, in_channels: int):
         super(ComplexBatchNorm2d, self).__init__()
 
-        self.batchnorm = nn.BatchNorm2d(in_channel, affine=True)
+        self.batchnorm = nn.BatchNorm2d(in_channels, affine=True)
 
-    def forward(self, m, phi):
+    def forward(self, m: torch.FloatTensor, phi: torch.FloatTensor):
         m = self.batchnorm(m)
         return m, phi
 
 
 class ComplexLayerNorm(nn.Module):
-    def __init__(self, in_channel):
+    def __init__(self, in_channels: int):
         super(ComplexLayerNorm, self).__init__()
 
-        self.layernorm = nn.LayerNorm(in_channel, elementwise_affine=True)
+        self.layernorm = nn.LayerNorm(in_channels, elementwise_affine=True)
 
-    def forward(self, m, phi):
+    def forward(self, m: torch.FloatTensor, phi: torch.FloatTensor):
         m = self.layernorm(m)
         return m, phi
 
@@ -211,7 +211,7 @@ class ComplexReLU(nn.Module):
     def __init__(self):
         super(ComplexReLU, self).__init__()
 
-    def forward(self, m, phi):
+    def forward(self, m: torch.FloatTensor, phi: torch.FloatTensor):
         m = torch.nn.functional.relu(m)
         return m, phi
 
@@ -220,7 +220,7 @@ class ComplexCollapse(nn.Module):
     def __init__(self):
         super(ComplexCollapse, self).__init__()
 
-    def forward(self, m, phi):
+    def forward(self, m: torch.FloatTensor, phi: torch.FloatTensor):
         return get_complex_number(m, phi)
 
 
@@ -235,7 +235,9 @@ class ComplexSequential(nn.Sequential):
 
 
 class ComplexMaxPool2d(nn.Module):
-    def __init__(self, kernel_size, stride=None, padding=0, dilation=1):
+    def __init__(
+        self, kernel_size: int, stride: int = None, padding: int = 0, dilation: int = 1
+    ):
         super(ComplexMaxPool2d, self).__init__()
 
         self.kernel_size = kernel_size
@@ -243,7 +245,7 @@ class ComplexMaxPool2d(nn.Module):
         self.padding = padding
         self.dilation = dilation
 
-    def forward(self, x):
+    def forward(self, x: torch.cfloat):
         _, index = F.max_pool2d(
             x.abs(),
             self.kernel_size,
@@ -264,15 +266,10 @@ class ComplexMaxPool2d(nn.Module):
 
 
 class ComplexMaxUnpool2d(nn.Module):
-    def __init__(self, kernel_size, stride=None, padding=0, dilation=1):
+    def __init__(self):
         super(ComplexMaxUnpool2d, self).__init__()
 
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.padding = padding
-        self.dilation = dilation
-
-    def forward(self, x, index, out_shape):
+    def forward(self, x: torch.cfloat, index: torch.LongTensor, out_shape: tuple):
         b, c = x.shape[:2]
 
         x = x.flatten(start_dim=2)

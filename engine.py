@@ -38,7 +38,7 @@ def pre_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
     running_loss, n_div = 0, 0
 
 
-def dis_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
+def con_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
     batch_size = kwargs["train_batch_size"]
     image_height, image_width = kwargs["image_width"], kwargs["image_height"]
     model.train()
@@ -146,7 +146,7 @@ def dis_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
 def eval_one_epoch(model, dataloader, device, epoch, logger=None):
     # model.eval()
 
-    for step, (x, y) in enumerate(tqdm(dataloader)):
+    for step, (x, y) in enumerate(dataloader):
         x = x.to(device).float()
         complex_latent, reconstruction, complex_out = model(x)
 

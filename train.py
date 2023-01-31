@@ -1,4 +1,5 @@
 import random
+import engine
 import argparse
 import numpy as np
 
@@ -6,8 +7,6 @@ import torch
 import torch.nn as nn
 
 import torchvision
-
-from engine import pre_train_epoch, dis_train_epoch, eval_one_epoch
 
 from data_utils.datasets import NpzDataset
 from models.cae.ComplexAutoEncoder import ComplexAutoEncoder
@@ -58,6 +57,7 @@ if __name__ == "__main__":
         import wandb
 
         wandb.init(project=args.wandb_project, entity=args.wandb_entity)
+        wandb.config.update(vars(args))
         logger = wandb
 
     device = torch.device(args.device)
@@ -121,7 +121,7 @@ if __name__ == "__main__":
         np.random.seed(worker_seed)
         random.seed(worker_seed)
 
-    train_batch_size = args.train_batch_size if args.training_type == "dis" else 1
+    train_batch_size = args.train_batch_size if args.training_type == "pre" else 1
 
     train_loader = torch.utils.data.DataLoader(
         train_set,
@@ -144,8 +144,8 @@ if __name__ == "__main__":
     )
 
     for epoch in range(args.epochs):
-        eval_one_epoch(model, eval_loader, device, epoch, logger=logger)
-        locals()[f"{args.training_type}_train_epoch"](
+        engine.eval_one_epoch(model, eval_loader, device, epoch, logger=logger)
+        getattr(engine, f"{args.training_type}_train_epoch")(
             model,
             train_loader,
             optimizer,
