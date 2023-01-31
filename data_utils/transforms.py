@@ -42,7 +42,7 @@ class RandomResizedCrop(transforms.RandomResizedCrop):
     def forward(self, img):
         i, j, h, w = self.get_params(img, self.scale, self.ratio)
         img = F.resized_crop(
-            img, i, j, h, w, self.size, self.interpolation, antialias=self.antialias
+            img, i, j, h, w, self.size, self.interpolation
         )
 
         return torch.tensor([i, j, h, w]), img

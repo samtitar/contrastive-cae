@@ -12,11 +12,11 @@ from data_utils.transforms import RandomResizedCrop, resize_boxes
 from torchmetrics.functional import pairwise_cosine_similarity as pcs
 
 LOG_FREQUENCY = 250
-IMG_SIZE = 224
-PBATCH_SIZE = 16
 
 
-def pre_train_epoch(model, dataloader, optimizer, device, epoch, logger=None):
+def pre_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
+    model.train()
+
     running_loss, n_div = 0, 0
 
     for step, (x, y) in enumerate(tqdm(dataloader)):
@@ -33,46 +33,42 @@ def pre_train_epoch(model, dataloader, optimizer, device, epoch, logger=None):
         n_div += 1
 
         if logger != None and step % LOG_FREQUENCY == 0:
-            img_s, img_c, img_r, img_p = plot(
-                x, reconstruction, complex_out, logger.Image
-            )
-
-            logger.log(
-                {
-                    "Loss": running_loss / n_div,
-                    "Sample Image": img_s,
-                    "Phase Image": img_c,
-                    "Reconstruction Image": img_r,
-                    "Polar Projection": img_p,
-                }
-            )
+            logger.log({"Train Epoch": epoch, "Loss": running_loss / n_div})
 
     running_loss, n_div = 0, 0
 
 
-def dis_train_epoch(model, dataloader, optimizer, device, epoch, logger=None):
-    running_loss = 0
-    rrc = RandomResizedCrop(IMG_SIZE, scale=(0.1, 0.3), ratio=(0.75, 1.25))
+def dis_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
+    batch_size = kwargs["train_batch_size"]
+    image_height, image_width = kwargs["image_width"], kwargs["image_height"]
+    model.train()
+
+    running_loss, n_div = 0, 0
+    rrc = RandomResizedCrop(
+        (image_height, image_width), scale=(0.1, 0.3), ratio=(0.75, 1.25)
+    )
 
     for step, (x, y) in enumerate(tqdm(dataloader)):
         optimizer.zero_grad()
-        x_g = F_transforms.resize(x, (IMG_SIZE, IMG_SIZE)).to(device).float()
+        x_g = F_transforms.resize(x, (image_height, image_width)).to(device).float()
 
         for patch_idx in range(5):
             # Compute initial object assignments on "global" image
-            _, reconstruction, complex_out_g = model(x_g)
+            _, reconstruction_g, complex_out_g = model(x_g)
 
             # Divide image into randomly sampled "local" patches
-            boxes, x_l = list(zip(*[rrc(x[0]) for _ in range(PBATCH_SIZE)]))
+            boxes, x_l = list(zip(*[rrc(x[0]) for _ in range(batch_size)]))
 
             x_l = torch.stack(x_l).to(device).float()
 
-            boxes = resize_boxes(x.shape[2:], torch.stack(boxes), (IMG_SIZE, IMG_SIZE))
+            boxes = resize_boxes(
+                x.shape[2:], torch.stack(boxes), (image_height, image_width)
+            )
             boxes[:, 2:] += boxes[:, :2]
             boxes = boxes.long()
 
             # Obtain features for each patch
-            complex_latent_l, _, _ = model(x_l)
+            complex_latent_l, reconstruction_l, _ = model(x_l)
             features_l = complex_latent_l.abs().flatten(start_dim=1)
 
             # Compute similarities between features of each patch
@@ -82,16 +78,19 @@ def dis_train_epoch(model, dataloader, optimizer, device, epoch, logger=None):
                 similarities.max() - similarities.min()
             )
 
+            # # -------------------------------------- PLOTTING ----------------
+            # # -------------------------------------- PLOTTING ----------------
+            # # -------------------------------------- PLOTTING ----------------
             # idx = 1
 
             # # Plot patches
             # fig = plt.figure()
-            # fig.add_subplot(3, PBATCH_SIZE + 1, idx)
+            # fig.add_subplot(4, batch_size + 1, idx)
             # plt.imshow(x[0].permute(1, 2, 0), cmap="gray")
             # idx += 1
 
             # for i, patch in enumerate(x_l):
-            #     fig.add_subplot(3, PBATCH_SIZE + 1, idx)
+            #     fig.add_subplot(4, batch_size + 1, idx)
             #     plt.imshow(patch.permute(1, 2, 0).cpu().numpy(), cmap="gray")
             #     plt.title(f"Image: {i}")
             #     idx += 1
@@ -99,43 +98,66 @@ def dis_train_epoch(model, dataloader, optimizer, device, epoch, logger=None):
             # print(similarities.min(), similarities.max())
 
             # # Plot boxes
-            # fig.add_subplot(3, PBATCH_SIZE + 1, idx)
+            # fig.add_subplot(4, batch_size + 1, idx)
             # plt.imshow(x_g[0].permute(1, 2, 0).cpu().numpy(), cmap="gray")
             # idx += 1
 
             # for i, box in enumerate(boxes):
-            #     fig.add_subplot(3, PBATCH_SIZE + 1, idx)
+            #     fig.add_subplot(4, batch_size + 1, idx)
             #     box = x_g[0, :, box[0] : box[2], box[1] : box[3]]
             #     plt.imshow(box.permute(1, 2, 0).cpu().numpy(), cmap="gray")
             #     plt.title(f"Image: {i}")
             #     idx += 1
 
-            # fig.add_subplot(3, PBATCH_SIZE + 1, idx)
+            # # Plot recons
+            # fig.add_subplot(4, batch_size + 1, idx)
+            # plt.imshow(x_g[0].permute(1, 2, 0).cpu().numpy(), cmap="gray")
+            # idx += 1
+
+            # for i, recon in enumerate(reconstruction_l):
+            #     fig.add_subplot(4, batch_size + 1, idx)
+            #     plt.imshow(recon.permute(1, 2, 0).cpu().detach().numpy(), cmap="gray")
+            #     plt.title(f"Image: {i}")
+            #     idx += 1
+
+            # fig.add_subplot(4, batch_size + 1, idx)
             # plt.imshow(similarities.cpu().detach().numpy())
             # plt.show()
+            # # -------------------------------------- PLOTTING ----------------
+            # # -------------------------------------- PLOTTING ----------------
+            # # -------------------------------------- PLOTTING ----------------
 
             loss = polar_distance_loss(
                 complex_out_g[0, 0].angle(), boxes, similarities.to(device)
-            )
-
-            loss += 0.5 * F.binary_cross_entropy(reconstruction, x_g)
-
+            ) + F.binary_cross_entropy(reconstruction_g, x_g)
             loss.backward()
 
             optimizer.step()
             running_loss += loss.item()
-
-        with torch.no_grad():
-            complex_latent, reconstruction, complex_out = model(x_g)
+            n_div += 1
 
         if logger != None and step % LOG_FREQUENCY == 0:
+            logger.log({"Train Epoch": epoch, "Loss": running_loss / n_div})
+
+            running_loss, n_div = 0, 0
+
+
+@torch.no_grad()
+def eval_one_epoch(model, dataloader, device, epoch, logger=None):
+    # model.eval()
+
+    for step, (x, y) in enumerate(tqdm(dataloader)):
+        x = x.to(device).float()
+        complex_latent, reconstruction, complex_out = model(x)
+
+        if logger != None:
             img_s, img_c, img_r, img_p = plot(
                 x, reconstruction, complex_out, logger.Image
             )
 
             logger.log(
                 {
-                    "MSE Loss": running_loss / 100,
+                    "Evaluation Epoch": epoch,
                     "Sample Image": img_s,
                     "Phase Image": img_c,
                     "Reconstruction Image": img_r,
@@ -143,4 +165,4 @@ def dis_train_epoch(model, dataloader, optimizer, device, epoch, logger=None):
                 }
             )
 
-            running_loss = 0
+        break

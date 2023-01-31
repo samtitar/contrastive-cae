@@ -105,7 +105,7 @@ class ComplexConvUBlock3(nn.Module):
 
 
 class ComplexAutoEncoder(nn.Module):
-    def __init__(self, in_channel, in_height, in_width):
+    def __init__(self, in_channel, in_height, in_width, num_features):
         super(ComplexAutoEncoder, self).__init__()
 
         self.in_channel = in_channel
@@ -140,10 +140,12 @@ class ComplexAutoEncoder(nn.Module):
 
             return z.shape[1], z.shape[2], z.shape[3]
 
-        feature_c, feature_h, feature_w = compute_feature_size()
+        fc, fh, fw = compute_feature_size()
 
-        self.linear1 = ComplexLin(feature_c * feature_h * feature_w, 2048)
-        self.linear2 = ComplexLin(2048, feature_c * feature_h * feature_w)
+        self.linear1 = ComplexLin(fc * fh * fw, num_features * 2)
+        self.linear2 = ComplexLin(num_features * 2, num_features)
+        self.linear3 = ComplexLin(num_features, num_features * 2)
+        self.linear4 = ComplexLin(num_features * 2, fc * fh * fw)
 
         self._init_output_model()
 
@@ -154,8 +156,6 @@ class ComplexAutoEncoder(nn.Module):
     def forward(self, x):
         complex_input = self.collapse(x, torch.zeros_like(x))
 
-        print(x.shape)
-
         z, idx1, shape1 = self.down1(complex_input)
         z, idx2, shape2 = self.down2(z)
         z, idx3, shape3 = self.down3(z)
@@ -164,8 +164,10 @@ class ComplexAutoEncoder(nn.Module):
 
         z_shape = z.shape
         z = z.flatten(start_dim=1)
-        complex_latent = self.linear1(z)
-        z = self.linear2(complex_latent)
+        z = self.linear1(z)
+        complex_latent = self.linear2(z)
+        z = self.linear3(complex_latent)
+        z = self.linear4(z)
         z = z.view(z_shape)
 
         z = self.up5(z, idx5, shape5)
