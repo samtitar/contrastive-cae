@@ -1,3 +1,4 @@
+import os
 import random
 import engine
 import argparse
@@ -28,13 +29,15 @@ def parse_args():
     parser.add_argument("--image-height", default=224, type=int)
     parser.add_argument("--image-width", default=224, type=int)
     parser.add_argument("--num-features", default=1024, type=int)
+    parser.add_argument("--num-clusters", default=20, type=int)
 
     # Training settings
-    parser.add_argument("--training-type", default="pre", choices=["pre", "con"])
-    parser.add_argument("--checkpoint-path", default=None, type=str)
+    parser.add_argument(
+        "--training-type", default="pre", choices=["pre", "con", "mas", "dum"]
+    )
     parser.add_argument("--dataset", default="StanfordCars", type=str)
     parser.add_argument("--dataset-root", default="datasets")
-    parser.add_argument("--epochs", default=500, type=int)
+    parser.add_argument("--epochs", default=1000, type=int)
     parser.add_argument("--lr", default=0.001, type=float)
     parser.add_argument("--train-batch-size", default=32, type=int)
     parser.add_argument("--eval-batch-size", default=32, type=int)
@@ -45,6 +48,8 @@ def parse_args():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", default=42, type=int)
     parser.add_argument("--num-workers", default=8, type=int)
+    parser.add_argument("--outdir-path", default="checkpoints", type=str)
+    parser.add_argument("--checkpoint-path", default=None, type=str)
 
     return parser.parse_args()
 
@@ -60,68 +65,84 @@ if __name__ == "__main__":
         wandb.config.update(vars(args))
         logger = wandb
 
+        args.outdir_path = args.outdir_path.replace("[wandb_run_id]", wandb.run.id)
+
     device = torch.device(args.device)
 
     model = ComplexAutoEncoder(
-        args.image_channels, args.image_height, args.image_width, args.num_features
+        args.image_channels,
+        args.image_height,
+        args.image_width,
+        args.num_features,
+        args.num_clusters,
     )
 
     if args.checkpoint_path != None:
-        model.load_state_dict(torch.load(args.checkpoint_path, map_location="cpu"))
+        sd = torch.load(args.checkpoint_path, map_location="cpu")
+        model.load_state_dict(sd)
     model.to(device)
+
+    if args.training_type == "mas":
+        for n, p in model.named_parameters():
+            if "clustering" not in n:
+                p.requires_grad = False
 
     print(sum(p.numel() for p in model.parameters() if p.requires_grad))
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
-    train_transforms_list = [torchvision.transforms.ToTensor()]
-    eval_transforms_list = [torchvision.transforms.ToTensor()]
+    train_transforms_list = [
+        torchvision.transforms.ToTensor(),
+        torchvision.transforms.Resize((args.image_height, args.image_width)),
+    ]
+
+    eval_transforms_list = [
+        torchvision.transforms.ToTensor(),
+        torchvision.transforms.Resize((args.image_height, args.image_width)),
+    ]
 
     if args.image_channels == 1:
         train_transforms_list.append(torchvision.transforms.Grayscale())
         eval_transforms_list.append(torchvision.transforms.Grayscale())
 
-    if args.training_type == "pre":
-        train_transforms_list.append(
-            torchvision.transforms.RandomChoice(
-                [
-                    torchvision.transforms.RandomResizedCrop(
-                        (args.image_height, args.image_width), ratio=(0.01, 2)
-                    ),
-                    torchvision.transforms.Resize(
-                        (args.image_height, args.image_width)
-                    ),
-                ]
-            ),
-        )
-
-    eval_transforms_list.append(
-        torchvision.transforms.Resize((args.image_height, args.image_width))
-    )
-
     train_transforms = torchvision.transforms.Compose(train_transforms_list)
     eval_transforms = torchvision.transforms.Compose(eval_transforms_list)
 
+    train_set_kwargs = {}
+    eval_set_kwargs = {}
+
+    if args.dataset == "Caltech256":
+        train_set_kwargs["download"] = True
+        eval_set_kwargs["download"] = True
+    elif args.dataset == "CocoDetection":
+        train_set_kwargs["annFile"] = f"{args.dataset_root}/annotations/train2017.json"
+        eval_set_kwargs["annFile"] = f"{args.dataset_root}/annotations/val2017.json"
+
     train_set = getattr(torchvision.datasets, args.dataset)(
-        root=args.dataset_root, transform=train_transforms
+        root=args.dataset_root, transform=train_transforms, **train_set_kwargs
     )
 
     eval_set = getattr(torchvision.datasets, args.dataset)(
-        root=args.dataset_root, transform=eval_transforms
+        root=args.dataset_root, transform=eval_transforms, **eval_set_kwargs
     )
 
-    # Improve reproducibility in dataloader.
     g = torch.Generator()
     g.manual_seed(42)
 
+    torch.backends.cudnn.benchmark = False
     torch.manual_seed(42)
+    np.random.seed(42)
+    random.seed(42)
 
     def seed_worker(worker_id):
         worker_seed = torch.initial_seed() % 2**32
         np.random.seed(worker_seed)
         random.seed(worker_seed)
 
-    train_batch_size = args.train_batch_size if args.training_type == "pre" else 1
+    train_batch_size = args.train_batch_size
+
+    if not os.path.isdir(args.outdir_path):
+        os.mkdir(args.outdir_path)
 
     train_loader = torch.utils.data.DataLoader(
         train_set,
@@ -144,7 +165,19 @@ if __name__ == "__main__":
     )
 
     for epoch in range(args.epochs):
-        engine.eval_one_epoch(model, eval_loader, device, epoch, logger=logger)
+        engine.eval_epoch(
+            model,
+            eval_loader,
+            device,
+            epoch,
+            logger=logger,
+            batch_size=args.train_batch_size,
+            image_channels=args.image_channels,
+            image_height=args.image_height,
+            image_width=args.image_width,
+            num_clusters=args.num_clusters,
+        )
+
         getattr(engine, f"{args.training_type}_train_epoch")(
             model,
             train_loader,
@@ -153,8 +186,10 @@ if __name__ == "__main__":
             epoch,
             logger=logger,
             batch_size=args.train_batch_size,
+            image_channels=args.image_channels,
             image_height=args.image_height,
             image_width=args.image_width,
+            num_clusters=args.num_clusters,
         )
 
-        torch.save(model.state_dict(), f"{args.training_type}-trained.pt")
+        torch.save(model.state_dict(), f"{args.outdir_path}/checkpoint{epoch}.pt")

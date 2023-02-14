@@ -47,36 +47,6 @@ def tensor_to_numpy(input_tensor):
     return input_tensor.detach().cpu().numpy()
 
 
-def spherical_to_cartesian_coordinates(x):
-    # Second dimension of x contains spherical coordinates: (r, phi_1, ... phi_n).
-    num_dims = x.shape[1]
-    out = torch.zeros_like(x)
-
-    r = x[:, 0]
-    phi = x[:, 1:]
-
-    sin_component = 1
-    for i in range(num_dims - 1):
-        out[:, i] = r * torch.cos(phi[:, i]) * sin_component
-        sin_component = sin_component * torch.sin(phi[:, i])
-
-    out[:, -1] = r * sin_component
-    return out
-
-
-def phase_to_cartesian_coordinates(opt, phase, norm_magnitude):
-    # Map phases on unit-circle and transform to cartesian coordinates.
-    unit_circle_phase = torch.concat(
-        (torch.ones_like(phase)[:, None], phase[:, None]), dim=1
-    )
-
-    if opt.evaluation.phase_mask_threshold != -1:
-        # When magnitude is < phase_mask_threshold, use as multiplier to mask out respective phases from eval.
-        unit_circle_phase = unit_circle_phase * norm_magnitude[:, None]
-
-    return spherical_to_cartesian_coordinates(unit_circle_phase)
-
-
 def clip_and_rescale(input_tensor, clip_value):
     if torch.is_tensor(input_tensor):
         clipped = torch.clamp(input_tensor, min=0, max=clip_value)
@@ -265,6 +235,21 @@ class ComplexMaxPool2d(nn.Module):
         )
 
 
+class ComplexAveragePool(nn.Module):
+    def __init__(self, kernel_size: int, stride: int = None, padding: int = 0):
+        super(ComplexMaxPool2d, self).__init__()
+
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+
+    def forward(self, x: torch.cfloat):
+        return get_complex_number(
+            F.avg_pool2d(x.abs(), self.kernel_size, self.stride, self.padding),
+            F.avg_pool2d(stable_angle(x), self.kernel_size, self.stride, self.padding),
+        )
+
+
 class ComplexMaxUnpool2d(nn.Module):
     def __init__(self):
         super(ComplexMaxUnpool2d, self).__init__()
@@ -279,4 +264,18 @@ class ComplexMaxUnpool2d(nn.Module):
 
         return empty.scatter_(dim=2, index=index, src=x).view(
             b, c, out_shape[0], out_shape[1]
+        )
+
+
+class ComplexUpSampling2d(nn.Module):
+    def __init__(self, shape, mode="bilinear"):
+        super(ComplexUpSampling2d, self).__init__()
+
+        self.shape = shape
+        self.mode = mode
+
+    def forward(self, x: torch.cfloat):
+        return get_complex_number(
+            F.interpolate(x.abs(), self.shape, mode=self.mode),
+            F.interpolate(stable_angle(x), self.shape, mode=self.mode),
         )

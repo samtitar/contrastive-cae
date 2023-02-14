@@ -112,13 +112,15 @@ def local_contrast_loss(angles, kernel_size=3):
     return dist.mean()
 
 
-def local_cluster_entropy(clusters, kernel_size=3):
-    contrast = F.unfold(clusters.float(), kernel_size)
+def local_cluster_entropy(clusters, kernel_size=3, padding=1):
+    contrast = F.unfold(clusters.float(), kernel_size, dilation=1, padding=1)
     indices = torch.combinations(torch.arange(contrast.shape[1]))
+    print(contrast.shape, indices.shape)
 
-    dist = (contrast[:, indices[:, 0]] == contrast[:, indices[:, 1]]).float().sum(dim=0)
+    dist = (contrast[:, indices[:, 0]] != contrast[:, indices[:, 1]])
+    print(dist.shape)
 
-    return dist.reshape(6, 6)
+    return dist.reshape(8, 8)
 
 
 def mask_iou(

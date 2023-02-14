@@ -1,3 +1,6 @@
+import random
+import numpy as np
+
 import torch
 import torchvision
 import torch.nn.functional as F
@@ -5,163 +8,252 @@ import torchvision.transforms.functional as F_transforms
 
 import matplotlib.pyplot as plt
 
+from utils import *
 from tqdm.auto import tqdm
-from utils import plot, polar_distance_loss
 
 from data_utils.transforms import RandomResizedCrop, resize_boxes
 from torchmetrics.functional import pairwise_cosine_similarity as pcs
 
-LOG_FREQUENCY = 250
+LOG_FREQUENCY = 25
 
 
 def pre_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
+    image_channels, image_height, image_width = (
+        kwargs["image_channels"],
+        kwargs["image_width"],
+        kwargs["image_height"],
+    )
+
     model.train()
 
     running_loss, n_div = 0, 0
 
-    for step, (x, y) in enumerate(tqdm(dataloader)):
+    for batch_idx, (x, y) in enumerate(tqdm(dataloader)):
+        batch_size = x.shape[0]
         optimizer.zero_grad()
 
         x = x.to(device).float()
-        _, reconstruction, complex_out = model(x)
 
-        loss = F.binary_cross_entropy(reconstruction, x)
+        target = x
+
+        _, reconstruction, complex_out, _ = model(x)
+
+        loss_weights = {"bce_loss": 1}
+        loss_dict = {
+            "bce_loss": F.binary_cross_entropy(reconstruction, target),
+        }
+
+        loss = sum([v * loss_weights[k] for k, v in loss_dict.items()])
         loss.backward()
 
         optimizer.step()
         running_loss += loss.item()
         n_div += 1
 
-        if logger != None and step % LOG_FREQUENCY == 0:
-            logger.log({"Train Epoch": epoch, "Loss": running_loss / n_div})
-
-    running_loss, n_div = 0, 0
-
-
-def con_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
-    batch_size = kwargs["train_batch_size"]
-    image_height, image_width = kwargs["image_width"], kwargs["image_height"]
-    model.train()
-
-    running_loss, n_div = 0, 0
-    rrc = RandomResizedCrop(
-        (image_height, image_width), scale=(0.1, 0.3), ratio=(0.75, 1.25)
-    )
-
-    for step, (x, y) in enumerate(tqdm(dataloader)):
-        optimizer.zero_grad()
-        x_g = F_transforms.resize(x, (image_height, image_width)).to(device).float()
-
-        for patch_idx in range(5):
-            # Compute initial object assignments on "global" image
-            _, reconstruction_g, complex_out_g = model(x_g)
-
-            # Divide image into randomly sampled "local" patches
-            boxes, x_l = list(zip(*[rrc(x[0]) for _ in range(batch_size)]))
-
-            x_l = torch.stack(x_l).to(device).float()
-
-            boxes = resize_boxes(
-                x.shape[2:], torch.stack(boxes), (image_height, image_width)
+        if logger != None and batch_idx % LOG_FREQUENCY == 0 and batch_idx != 0:
+            logger.log(
+                dict(
+                    {
+                        "train_epoch": epoch,
+                        "train_sample": epoch * dataloader.batch_size * len(dataloader)
+                        + batch_idx * dataloader.batch_size,
+                        "total_loss": running_loss / n_div,
+                    },
+                    **loss_dict,
+                )
             )
-            boxes[:, 2:] += boxes[:, :2]
-            boxes = boxes.long()
-
-            # Obtain features for each patch
-            complex_latent_l, reconstruction_l, _ = model(x_l)
-            features_l = complex_latent_l.abs().flatten(start_dim=1)
-
-            # Compute similarities between features of each patch
-            similarities = pcs(features_l)
-            similarities.fill_diagonal_(0.5)
-            similarities = (similarities - similarities.min()) / (
-                similarities.max() - similarities.min()
-            )
-
-            # # -------------------------------------- PLOTTING ----------------
-            # # -------------------------------------- PLOTTING ----------------
-            # # -------------------------------------- PLOTTING ----------------
-            # idx = 1
-
-            # # Plot patches
-            # fig = plt.figure()
-            # fig.add_subplot(4, batch_size + 1, idx)
-            # plt.imshow(x[0].permute(1, 2, 0), cmap="gray")
-            # idx += 1
-
-            # for i, patch in enumerate(x_l):
-            #     fig.add_subplot(4, batch_size + 1, idx)
-            #     plt.imshow(patch.permute(1, 2, 0).cpu().numpy(), cmap="gray")
-            #     plt.title(f"Image: {i}")
-            #     idx += 1
-
-            # print(similarities.min(), similarities.max())
-
-            # # Plot boxes
-            # fig.add_subplot(4, batch_size + 1, idx)
-            # plt.imshow(x_g[0].permute(1, 2, 0).cpu().numpy(), cmap="gray")
-            # idx += 1
-
-            # for i, box in enumerate(boxes):
-            #     fig.add_subplot(4, batch_size + 1, idx)
-            #     box = x_g[0, :, box[0] : box[2], box[1] : box[3]]
-            #     plt.imshow(box.permute(1, 2, 0).cpu().numpy(), cmap="gray")
-            #     plt.title(f"Image: {i}")
-            #     idx += 1
-
-            # # Plot recons
-            # fig.add_subplot(4, batch_size + 1, idx)
-            # plt.imshow(x_g[0].permute(1, 2, 0).cpu().numpy(), cmap="gray")
-            # idx += 1
-
-            # for i, recon in enumerate(reconstruction_l):
-            #     fig.add_subplot(4, batch_size + 1, idx)
-            #     plt.imshow(recon.permute(1, 2, 0).cpu().detach().numpy(), cmap="gray")
-            #     plt.title(f"Image: {i}")
-            #     idx += 1
-
-            # fig.add_subplot(4, batch_size + 1, idx)
-            # plt.imshow(similarities.cpu().detach().numpy())
-            # plt.show()
-            # # -------------------------------------- PLOTTING ----------------
-            # # -------------------------------------- PLOTTING ----------------
-            # # -------------------------------------- PLOTTING ----------------
-
-            loss = polar_distance_loss(
-                complex_out_g[0, 0].angle(), boxes, similarities.to(device) > 0.5
-            ) + F.binary_cross_entropy(reconstruction_g, x_g)
-            loss.backward()
-
-            optimizer.step()
-            running_loss += loss.item()
-            n_div += 1
-
-        if logger != None and step % LOG_FREQUENCY == 0:
-            logger.log({"Train Epoch": epoch, "Loss": running_loss / n_div})
 
             running_loss, n_div = 0, 0
 
 
 @torch.no_grad()
-def eval_one_epoch(model, dataloader, device, epoch, logger=None):
-    # model.eval()
+def dum_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
+    image_channels, image_height, image_width = (
+        kwargs["image_channels"],
+        kwargs["image_width"],
+        kwargs["image_height"],
+    )
 
-    for step, (x, y) in enumerate(dataloader):
+    model.eval()
+
+    from sklearn.manifold import TSNE
+
+    latents = []
+    for batch_idx, (x, y) in enumerate(tqdm(dataloader)):
+        batch_size = x.shape[0]
+
+        l, _, _, _ = model(x.to(device).float())
+        latents.append(l.abs().cpu())
+
+    latents = torch.cat(latents).numpy()
+    print(latents.mean(), latents.std(), latents.min(), latents.max())
+    latents = TSNE().fit_transform(latents)
+
+    plt.scatter(latents[:, 0], latents[:, 1])
+    plt.show()
+
+
+def mas_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
+    image_channels, image_height, image_width, num_clusters = (
+        kwargs["image_channels"],
+        kwargs["image_width"],
+        kwargs["image_height"],
+        kwargs["num_clusters"],
+    )
+
+    model.masked_train()
+
+    running_loss, n_div = 0, 0
+
+    for batch_idx, (x, y) in enumerate(tqdm(dataloader)):
+        batch_size = x.shape[0]
+        optimizer.zero_grad()
+
         x = x.to(device).float()
-        complex_latent, reconstruction, complex_out = model(x)
+
+        _, _, complex_out, clusters = model(x)
+        cluster_labels, cluster_channels = apply_kmeans(
+            complex_out, n_clusters=num_clusters
+        )
+
+        channel_indices = bipartite_mask_matching(
+            clusters.detach().clone().cpu(), cluster_channels.float()
+        ).flatten()
+
+        batch_indices = torch.arange(x.shape[0]).unsqueeze(1)
+        batch_indices = batch_indices.repeat(1, num_clusters)
+        batch_indices = batch_indices.flatten()
+
+        loss_weights = {"bce_loss": 1}
+        loss_dict = {
+            "bce_loss": F.binary_cross_entropy(
+                clusters.flatten(end_dim=1),
+                cluster_channels[batch_indices, channel_indices].float().to(device),
+            ),
+        }
+
+        loss = sum([v * loss_weights[k] for k, v in loss_dict.items()])
+        loss.backward()
+
+        optimizer.step()
+        running_loss += loss.item()
+        n_div += 1
+
+        if logger != None and batch_idx % LOG_FREQUENCY == 0 and batch_idx != 0:
+            logger.log(
+                dict(
+                    {
+                        "train_epoch": epoch,
+                        "train_sample": epoch * dataloader.batch_size * len(dataloader)
+                        + batch_idx * dataloader.batch_size,
+                        "total_loss": running_loss / n_div,
+                    },
+                    **loss_dict,
+                )
+            )
+
+            running_loss, n_div = 0, 0
+
+
+def con_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
+    batch_size = kwargs["batch_size"]
+    image_channels, image_height, image_width = (
+        kwargs["image_channels"],
+        kwargs["image_width"],
+        kwargs["image_height"],
+    )
+
+    model.train()
+
+    running_loss, n_div = 0, 0
+    for batch_idx, (x, y) in enumerate(tqdm(dataloader)):
+        optimizer.zero_grad()
+
+        # Compute initial object assignments on "global" image
+        _, reconstruction, complex_out, clusters = model(x)
+        clusters_ind = torch.argmax(clusters, dim=1)
+
+        for cluster in range(clusters.shape[1]):
+            masks = clusters[:, cluster]
+
+            # Reparameterization for "hard" masks
+            masks_hard = torch.zeros_like(masks)
+            masks_hard[clusters_ind == cluster] = 1
+            masks = masks_hard - masks.detach() + masks
+
+            masks = masks.unsqueeze(1)
+            masks_inv = 1 - masks
+
+            with torch.no_grad():
+                _, _, complex_p, _ = model(x, masks=masks)
+                _, _, complex_n, _ = model(x, masks=masks_inv)
+
+            pdl = 1 - polar_distance(complex_p.angle().mean(), complex_n.angle().mean())
+
+            loss_weights = {"bce_loss": 1, "pdl_loss": 0.1}
+
+            loss_dict = {
+                "bce_loss": F.binary_cross_entropy(reconstruction, x),
+                "pdl_loss": pdl,
+            }
+
+        loss = sum([v * loss_weights[k] for k, v in loss_dict.items()])
+        loss.backward()
+
+        optimizer.step()
+        running_loss += loss.item()
+        n_div += 1
+
+        if logger != None and batch_idx % LOG_FREQUENCY == 0 and batch_idx != 0:
+            logger.log(
+                dict(
+                    {
+                        "train_epoch": epoch,
+                        "train_sample": epoch * batch_size * len(dataloader)
+                        + batch_idx * batch_size,
+                        "total_loss": running_loss / n_div,
+                    },
+                    **loss_dict,
+                )
+            )
+            running_loss, n_div = 0, 0
+
+
+@torch.no_grad()
+def eval_epoch(model, dataloader, device, epoch, logger=None, **kwargs):
+    image_channels, image_height, image_width, num_clusters = (
+        kwargs["image_channels"],
+        kwargs["image_width"],
+        kwargs["image_height"],
+        kwargs["num_clusters"],
+    )
+
+    model.eval()
+
+    for batch_idx, (x, y) in enumerate(dataloader):
+        batch_size = x.shape[0]
+        x = x.to(device).float()
+
+        complex_latent, reconstruction, complex_out, clusters = model(x)
+        cluster_labels, _ = apply_kmeans(complex_out, n_clusters=num_clusters)
+
+        cluster_labels = cluster_labels.float()
+        cluster_labels /= float(num_clusters)
 
         if logger != None:
-            img_s, img_c, img_r, img_p = plot(
-                x, reconstruction, complex_out, logger.Image
+            sam_img, pha_img, rec_img, pol_img, mas_img, cls_img = plot(
+                x, reconstruction, complex_out, clusters, cluster_labels, logger.Image
             )
 
             logger.log(
                 {
-                    "Evaluation Epoch": epoch,
-                    "Sample Image": img_s,
-                    "Phase Image": img_c,
-                    "Reconstruction Image": img_r,
-                    "Polar Projection": img_p,
+                    "eval_epoch": epoch,
+                    "sample_image": sam_img,
+                    "phase_image": pha_img,
+                    "recon_image": rec_img,
+                    "polar_image": pol_img,
+                    "masks_image": mas_img,
+                    "cluster_image": cls_img,
                 }
             )
 
