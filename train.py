@@ -156,7 +156,7 @@ if __name__ == "__main__":
     train_loader = torch.utils.data.DataLoader(
         train_set,
         batch_size=train_batch_size,
-        shuffle=False,
+        shuffle=True,
         worker_init_fn=seed_worker,
         generator=g,
         num_workers=args.num_workers,
@@ -174,18 +174,18 @@ if __name__ == "__main__":
     )
 
     for epoch in range(args.epochs):
-        # engine.eval_epoch(
-        #     model,
-        #     eval_loader,
-        #     device,
-        #     epoch,
-        #     logger=logger,
-        #     batch_size=args.train_batch_size,
-        #     image_channels=args.image_channels,
-        #     image_height=args.image_height,
-        #     image_width=args.image_width,
-        #     num_clusters=args.num_clusters,
-        # )
+        engine.eval_epoch(
+            model,
+            eval_loader,
+            device,
+            epoch,
+            logger=logger,
+            batch_size=args.train_batch_size,
+            image_channels=args.image_channels,
+            image_height=args.image_height,
+            image_width=args.image_width,
+            num_clusters=args.num_clusters,
+        )
 
         getattr(engine, f"{args.training_type}_train_epoch")(
             model,

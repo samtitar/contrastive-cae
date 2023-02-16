@@ -62,9 +62,7 @@ def plot(
         plt.close()
 
         mas_img = SMAP(MinMaxScaler().fit_transform(clusters[i].cpu().detach().numpy()))
-        lab_img = SMAP(
-            MinMaxScaler().fit_transform(cluster_labels[i].cpu().detach().numpy())
-        )
+        lab_img = SMAP(cluster_labels[i].cpu().detach().numpy())
 
         img_s.append(img_func(img))
         img_c.append(img_func(pha_img))
