@@ -68,29 +68,22 @@ def pre_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
 
 @torch.no_grad()
 def dum_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
-    image_channels, image_height, image_width = (
+    image_channels, image_height, image_width, num_clusters = (
         kwargs["image_channels"],
         kwargs["image_width"],
         kwargs["image_height"],
+        kwargs["num_clusters"],
     )
 
     model.eval()
 
-    from sklearn.manifold import TSNE
-
-    latents = []
     for batch_idx, (x, y) in enumerate(tqdm(dataloader)):
         batch_size = x.shape[0]
 
-        l, _, _, _ = model(x.to(device).float())
-        latents.append(l.abs().cpu())
+        x = x.to(device).float()
 
-    latents = torch.cat(latents).numpy()
-    print(latents.mean(), latents.std(), latents.min(), latents.max())
-    latents = TSNE().fit_transform(latents)
-
-    plt.scatter(latents[:, 0], latents[:, 1])
-    plt.show()
+        _, _, complex_out, clusters = model(x)
+        cluster_lab, cluster_chn = apply_kmeans(complex_out, n_clusters=num_clusters)
 
 
 def mas_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
@@ -235,7 +228,7 @@ def eval_epoch(model, dataloader, device, epoch, logger=None, **kwargs):
         x = x.to(device).float()
 
         complex_latent, reconstruction, complex_out, clusters = model(x)
-        cluster_labels, _ = apply_kmeans(complex_out, n_clusters=num_clusters)
+        cluster_lab, _ = apply_kmeans(complex_out, n_clusters=num_clusters)
 
         cluster_labels = cluster_labels.float()
         cluster_labels /= float(num_clusters)

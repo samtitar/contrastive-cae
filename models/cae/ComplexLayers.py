@@ -268,14 +268,12 @@ class ComplexMaxUnpool2d(nn.Module):
 
 
 class ComplexUpSampling2d(nn.Module):
-    def __init__(self, shape, mode="bilinear"):
+    def __init__(self, mode="nearest"):
         super(ComplexUpSampling2d, self).__init__()
-
-        self.shape = shape
         self.mode = mode
 
-    def forward(self, x: torch.cfloat):
+    def forward(self, x: torch.cfloat, out_shape: tuple):
         return get_complex_number(
-            F.interpolate(x.abs(), self.shape, mode=self.mode),
-            F.interpolate(stable_angle(x), self.shape, mode=self.mode),
+            F.interpolate(x.abs(), out_shape, mode=self.mode),
+            F.interpolate(stable_angle(x), out_shape, mode=self.mode),
         )

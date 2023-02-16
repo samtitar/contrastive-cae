@@ -18,6 +18,7 @@ from skimage import measure
 import matplotlib
 
 CMAP = matplotlib.colormaps["hsv"]
+SMAP = matplotlib.colormaps["viridis"]
 
 
 def plot(
@@ -41,7 +42,6 @@ def plot(
         pha_norm = pha / (2 * np.pi)
 
         pha_img = CMAP(pha_norm)
-        # pha_img[mag < 0.1] = [1, 1, 1, 1]
 
         rec_img = reconstruction[i].cpu().detach().numpy().transpose(1, 2, 0)
         rec_img = (rec_img - rec_img.min()) / (rec_img.max() - rec_img.min())
@@ -49,7 +49,6 @@ def plot(
         pha_flt = pha.reshape(pha.shape[0] * pha.shape[1])
         mag_flt = mag.reshape(mag.shape[0] * mag.shape[1])
         pha_col = CMAP(pha_flt / (2 * np.pi))
-        # keep = mag_flt > 0.1
 
         fig = plt.figure()
         ax = fig.add_subplot(projection="polar")
@@ -62,8 +61,10 @@ def plot(
         plt.clf()
         plt.close()
 
-        mas_img = CMAP(clusters[i].cpu().detach().numpy())
-        lab_img = CMAP(cluster_labels[i].cpu().detach().numpy())
+        mas_img = SMAP(MinMaxScaler().fit_transform(clusters[i].cpu().detach().numpy()))
+        lab_img = SMAP(
+            MinMaxScaler().fit_transform(cluster_labels[i].cpu().detach().numpy())
+        )
 
         img_s.append(img_func(img))
         img_c.append(img_func(pha_img))
@@ -98,29 +99,14 @@ def polar_distance_loss(angles, boxes, similarities):
     return (m_similarities_pairs - m_polar_distance).mean()
 
 
-def polar_distance_loss_masked(angles1, angles2, masks, targets):
-    pass
+# def local_contrast_loss(angles, kernel_size=3):
+#     contrast = F.unfold(angles, kernel_size)
+#     indices = torch.combinations(torch.arange(contrast.shape[1]))
 
-
-def local_contrast_loss(angles, kernel_size=3):
-    contrast = F.unfold(angles, kernel_size)
-    indices = torch.combinations(torch.arange(contrast.shape[1]))
-
-    theta1 = contrast[:, indices[:, 0]]
-    theta2 = contrast[:, indices[:, 1]]
-    dist = polar_distance(theta1, theta2)  # .sum(dim=1)
-    return dist.mean()
-
-
-def local_cluster_entropy(clusters, kernel_size=3, padding=1):
-    contrast = F.unfold(clusters.float(), kernel_size, dilation=1, padding=1)
-    indices = torch.combinations(torch.arange(contrast.shape[1]))
-    print(contrast.shape, indices.shape)
-
-    dist = (contrast[:, indices[:, 0]] != contrast[:, indices[:, 1]])
-    print(dist.shape)
-
-    return dist.reshape(8, 8)
+#     theta1 = contrast[:, indices[:, 0]]
+#     theta2 = contrast[:, indices[:, 1]]
+#     dist = polar_distance(theta1, theta2)  # .sum(dim=1)
+#     return dist.mean()
 
 
 def mask_iou(
@@ -160,44 +146,62 @@ def bipartite_mask_matching(outputs, targets):
     return torch.tensor(indices).long()
 
 
-def apply_kmeans(complex_output, n_clusters=5):
+def apply_kmeans(complex_output, n_clusters=5, uniform_size=7, min_area_size=0.005):
     n_clusters -= 1
-    phas, labels, labels2 = [], [], []
+    b, _, h, w = complex_output.shape
+    cluster_lab = np.zeros((b, h, w))
+    cluster_chn = np.zeros((b, n_clusters, h, w))
+
     for i in range(len(complex_output)):
         pha = complex_output.angle()[i].cpu().detach().numpy()
         pha_norm = (pha + np.pi) / (2 * np.pi)
 
-        pha_img = CMAP(pha_norm.mean(axis=0))[:, :, :-1]
-        pha_img = uniform_filter(pha_img)
-        phas.append(torch.tensor(pha_img))
+        # phas.append(torch.tensor(CMAP(pha_norm.mean(axis=0))))
 
+        # 1. Apply uniform filter to phases
+        pha_img = np.expand_dims(pha_norm.mean(axis=0), -1)
+        pha_img = uniform_filter(pha_img, size=uniform_size)
+
+        # 1. Scale phases
         h, w, c = pha_img.shape
-        # pha_img = pha_norm.transpose(1, 2, 0)
         pha_img = pha_img.reshape((h * w), c)
         pha_img = MinMaxScaler().fit_transform(pha_img)
 
-        cls_img = KMeans(n_clusters, n_init=10).fit_transform(pha_img)
-        cls_img = np.argmax(cls_img.reshape(h, w, n_clusters), axis=-1)
-        cls_img2 = cls_img
+        # 2. Apply k-means to phases
+        kmc_img = KMeans(n_clusters, n_init=10).fit_transform(pha_img)
+        kmc_img = np.argmax(kmc_img.reshape(h, w, n_clusters), axis=-1)
 
-        cls_img_closed = np.zeros((n_clusters + 1, h, w))
-        for cls_idx in range(n_clusters):
+        # 3. For cluster in k-means
+        cls_img = []
+        for kmc_idx in range(n_clusters):
             cls_img_cur = np.zeros((h, w))
-            cls_img_cur[cls_img == cls_idx] = 1
+            cls_img_cur[kmc_img == kmc_idx] = 1
+
+            # 3a. Apply closing & opening to current cluster area
             cls_img_cur = binary_closing(cls_img_cur)
             cls_img_cur = binary_opening(cls_img_cur)
+
+            # 3b. Apply labeling to current cluster area
             cls_img_cur = measure.label(cls_img_cur)
 
-            mfv = np.median(cls_img_cur[cls_img_cur != 0])
+            # 3c. For cluster in cluster image
+            for cls_idx in range(cls_img_cur.max()):
+                # 3c1. Store are if large enough
+                if (cls_img_cur == cls_idx).sum() / (w * h) > min_area_size:
+                    cls_area = np.zeros((h, w))
+                    cls_area[cls_img_cur == cls_idx] = 1
+                    cls_img.append(cls_area)
 
-            if not np.isnan(mfv):
-                zeros = np.zeros((h, w))
-                zeros[cls_img_cur == int(mfv)] = 1
-                cls_img_closed[cls_idx + 1] = zeros
+        # 4. Apply argmax and extract channels
+        cls_img = np.argmax(cls_img, axis=0)
+        cls_chn = np.zeros((n_clusters, h, w))
 
-        cls_img = np.argmax(cls_img_closed, axis=0)
-        labels.append(torch.tensor(cls_img))
-        labels2.append(torch.tensor(cls_img_closed))
+        for cls_idx in range(cls_img.max()):
+            cls_area = np.zeros((h, w))
+            cls_area[cls_img == cls_idx] = 1
+            cls_chn[cls_idx] = cls_area
 
-    # return torch.stack(labels).long(), torch.stack(labels2).long(), torch.stack(phas)
-    return torch.stack(labels).long(), torch.stack(labels2).long()
+        cluster_lab[i] = cls_img
+        cluster_chn[i] = cls_chn
+
+    return cluster_lab, cluster_chn

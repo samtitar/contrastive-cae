@@ -117,12 +117,12 @@ class ComplexConvUBlock2(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
 
-        self.maxpool = ComplexLayers.ComplexMaxUnpool2d()
+        self.maxpool = ComplexLayers.ComplexUpSampling2d()
         self.conv1 = ComplexConv(in_channels, out_channels, 3, 1, 1)
         self.conv2 = ComplexConv(out_channels, out_channels, 3, 1, 1)
 
-    def forward(self, x, indices, out_shape):
-        z = self.maxpool(x, indices, out_shape)
+    def forward(self, x, out_shape):
+        z = self.maxpool(x, out_shape)
         z = self.conv1(z)
         return self.conv2(z)
 
@@ -131,13 +131,13 @@ class ComplexConvUBlock3(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
 
-        self.maxpool = ComplexLayers.ComplexMaxUnpool2d()
+        self.maxpool = ComplexLayers.ComplexUpSampling2d()
         self.conv1 = ComplexConv(in_channels, out_channels, 3, 1, 1)
         self.conv2 = ComplexConv(out_channels, out_channels, 3, 1, 1)
         self.conv3 = ComplexConv(out_channels, out_channels, 3, 1, 1)
 
-    def forward(self, x, indices, out_shape):
-        z = self.maxpool(x, indices, out_shape)
+    def forward(self, x, out_shape):
+        z = self.maxpool(x, out_shape)
         z = self.conv1(z)
         z = self.conv2(z)
         return self.conv3(z)
@@ -218,11 +218,11 @@ class ComplexAutoEncoder(nn.Module):
             x = torch.zeros(1, self.in_channels, in_height, in_width)
             complex_input = self.collapse(x, torch.zeros_like(x))
 
-            z, idx1, shape1 = self.down1(complex_input)
-            z, idx2, shape2 = self.down2(z)
-            z, idx3, shape3 = self.down3(z)
-            z, idx4, shape4 = self.down4(z)
-            z, idx5, shape5 = self.down5(z)
+            z, _, _ = self.down1(complex_input)
+            z, _, _ = self.down2(z)
+            z, _, _ = self.down3(z)
+            z, _, _ = self.down4(z)
+            z, _, _ = self.down5(z)
 
             return z.shape[1], z.shape[2], z.shape[3]
 
@@ -257,11 +257,11 @@ class ComplexAutoEncoder(nn.Module):
             complex_input = self.extend_and_apply(complex_input, masks)
 
         # Encode image
-        z, idx1, shape1 = self.down1(complex_input)
-        z, idx2, shape2 = self.down2(z)
-        z, idx3, shape3 = self.down3(z)
-        z, idx4, shape4 = self.down4(z)
-        z, idx5, shape5 = self.down5(z)
+        z, _, shape1 = self.down1(complex_input)
+        z, _, shape2 = self.down2(z)
+        z, _, shape3 = self.down3(z)
+        z, _, shape4 = self.down4(z)
+        z, _, shape5 = self.down5(z)
 
         if masks != None:
             z_masks = resize(masks, z.shape[-2:])
@@ -277,11 +277,11 @@ class ComplexAutoEncoder(nn.Module):
         cz = ComplexLayers.stable_angle(z)
 
         # Deocde features
-        z5 = self.up5(z, idx5, shape5)
-        z4 = self.up4(z5, idx4, shape4)
-        z3 = self.up3(z4, idx3, shape3)
-        z2 = self.up2(z3, idx2, shape2)
-        complex_output = self.up1(z2, idx1, shape1)
+        z5 = self.up5(z, shape5)
+        z4 = self.up4(z5, shape4)
+        z3 = self.up3(z4, shape3)
+        z2 = self.up2(z3, shape2)
+        complex_output = self.up1(z2, shape1)
 
         # Create cluster masks
         cz = self.clustering5(cz)

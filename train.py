@@ -47,7 +47,7 @@ def parse_args():
     parser.add_argument("--wandb-entity", default=None)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", default=42, type=int)
-    parser.add_argument("--num-workers", default=8, type=int)
+    parser.add_argument("--num-workers", default=4, type=int)
     parser.add_argument("--outdir-path", default="checkpoints", type=str)
     parser.add_argument("--checkpoint-path", default=None, type=str)
 
@@ -108,22 +108,31 @@ if __name__ == "__main__":
     train_transforms = torchvision.transforms.Compose(train_transforms_list)
     eval_transforms = torchvision.transforms.Compose(eval_transforms_list)
 
-    train_set_kwargs = {}
-    eval_set_kwargs = {}
+    tsk = {"root": args.dataset_root}
+    esk = {"root": args.dataset_root}
 
     if args.dataset == "Caltech256":
-        train_set_kwargs["download"] = True
-        eval_set_kwargs["download"] = True
+        tsk["download"] = True
+        esk["download"] = True
+    elif args.dataset == "ImageFolder":
+        tsk["root"] = f"{args.dataset_root}/train_images"
+        esk["root"] = f"{args.dataset_root}/val_images"
     elif args.dataset == "CocoDetection":
-        train_set_kwargs["annFile"] = f"{args.dataset_root}/annotations/train2017.json"
-        eval_set_kwargs["annFile"] = f"{args.dataset_root}/annotations/val2017.json"
+        tsk["annFile"] = f"{args.dataset_root}/annotations/instances_train2017.json"
+        esk["annFile"] = f"{args.dataset_root}/annotations/instances_val2017.json"
+
+        tsk["root"] = f"{args.dataset_root}/train2017"
+        esk["root"] = f"{args.dataset_root}/val2017"
+
+        tsk["target_transform"] = lambda x: 1
+        esk["target_transform"] = lambda x: 1
 
     train_set = getattr(torchvision.datasets, args.dataset)(
-        root=args.dataset_root, transform=train_transforms, **train_set_kwargs
+        transform=train_transforms, **tsk
     )
 
     eval_set = getattr(torchvision.datasets, args.dataset)(
-        root=args.dataset_root, transform=eval_transforms, **eval_set_kwargs
+        transform=eval_transforms, **esk
     )
 
     g = torch.Generator()
@@ -147,7 +156,7 @@ if __name__ == "__main__":
     train_loader = torch.utils.data.DataLoader(
         train_set,
         batch_size=train_batch_size,
-        shuffle=True,
+        shuffle=False,
         worker_init_fn=seed_worker,
         generator=g,
         num_workers=args.num_workers,
@@ -165,18 +174,18 @@ if __name__ == "__main__":
     )
 
     for epoch in range(args.epochs):
-        engine.eval_epoch(
-            model,
-            eval_loader,
-            device,
-            epoch,
-            logger=logger,
-            batch_size=args.train_batch_size,
-            image_channels=args.image_channels,
-            image_height=args.image_height,
-            image_width=args.image_width,
-            num_clusters=args.num_clusters,
-        )
+        # engine.eval_epoch(
+        #     model,
+        #     eval_loader,
+        #     device,
+        #     epoch,
+        #     logger=logger,
+        #     batch_size=args.train_batch_size,
+        #     image_channels=args.image_channels,
+        #     image_height=args.image_height,
+        #     image_width=args.image_width,
+        #     num_clusters=args.num_clusters,
+        # )
 
         getattr(engine, f"{args.training_type}_train_epoch")(
             model,
