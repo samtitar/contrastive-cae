@@ -98,22 +98,19 @@ def mas_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
 
     running_loss, n_div = 0, 0
 
-    for batch_idx, (x, y) in enumerate(tqdm(dataloader)):
+    for batch_idx, (x, _, y) in enumerate(tqdm(dataloader)):
         batch_size = x.shape[0]
         optimizer.zero_grad()
 
         x = x.to(device).float()
 
-        _, _, complex_out, clusters = model(x)
-        cluster_labels, cluster_channels = apply_kmeans(
-            complex_out, n_clusters=num_clusters
-        )
+        _, _, _, clusters = model(x)
 
         channel_indices = bipartite_mask_matching(
-            clusters.detach().clone().cpu(), cluster_channels.float()
+            clusters.detach().clone().cpu(), y
         ).flatten()
 
-        batch_indices = torch.arange(x.shape[0]).unsqueeze(1)
+        batch_indices = torch.arange(batch_size).unsqueeze(1)
         batch_indices = batch_indices.repeat(1, num_clusters)
         batch_indices = batch_indices.flatten()
 
@@ -121,7 +118,7 @@ def mas_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
         loss_dict = {
             "bce_loss": F.binary_cross_entropy(
                 clusters.flatten(end_dim=1),
-                cluster_channels[batch_indices, channel_indices].float().to(device),
+                y[batch_indices, channel_indices].to(device),
             ),
         }
 
@@ -161,12 +158,19 @@ def con_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
     running_loss, n_div = 0, 0
     for batch_idx, (x, y) in enumerate(tqdm(dataloader)):
         optimizer.zero_grad()
+        x = x.to(device).float()
+
+        bce = torch.zeros(1, requires_grad=True)
+        cdl = torch.zeros(1, requires_grad=True)
 
         # Compute initial object assignments on "global" image
-        _, reconstruction, complex_out, clusters = model(x)
+        _, _, _, clusters = model(x)
         clusters_ind = torch.argmax(clusters, dim=1)
+        num_clusters = torch.max(clusters).long().item()
 
-        for cluster in range(clusters.shape[1]):
+        # Iterate through each cluster
+        for cluster in range(num_clusters):
+            # Get binary mask for current cluster
             masks = clusters[:, cluster]
 
             # Reparameterization for "hard" masks
@@ -174,21 +178,29 @@ def con_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
             masks_hard[clusters_ind == cluster] = 1
             masks = masks_hard - masks.detach() + masks
 
+            # Get inverted masks
             masks = masks.unsqueeze(1)
             masks_inv = 1 - masks
 
-            with torch.no_grad():
-                _, _, complex_p, _ = model(x, masks=masks)
-                _, _, complex_n, _ = model(x, masks=masks_inv)
+            # Compute latents for x * masks and x * mask_inv
+            latent_p, recon_p, _, _ = model(x, masks=masks)
+            latent_n, recon_n, _, _ = model(x, masks=masks_inv)
 
-            pdl = 1 - polar_distance(complex_p.angle().mean(), complex_n.angle().mean())
+            bce = bce + 0.5 * (
+                F.binary_cross_entropy(recon_p, x * masks)
+                + F.binary_cross_entropy(recon_n, x * masks_inv)
+            )
 
-            loss_weights = {"bce_loss": 1, "pdl_loss": 0.1}
+            cdl = cdl + (
+                F.cosine_similarity(latent_p.abs(), latent_n.abs()).clamp(min=0).mean()
+            )
 
-            loss_dict = {
-                "bce_loss": F.binary_cross_entropy(reconstruction, x),
-                "pdl_loss": pdl,
-            }
+        loss_weights = {"bce_loss": 1, "cdl_loss": 0.1}
+
+        loss_dict = {
+            "bce_loss": bce / x.shape[0],
+            "cdl_loss": cdl / x.shape[0],
+        }
 
         loss = sum([v * loss_weights[k] for k, v in loss_dict.items()])
         loss.backward()
@@ -230,12 +242,12 @@ def eval_epoch(model, dataloader, device, epoch, logger=None, **kwargs):
         complex_latent, reconstruction, complex_out, clusters = model(x)
         cluster_lab, _ = apply_kmeans(complex_out, n_clusters=num_clusters)
 
-        cluster_labels = cluster_labels.float()
-        cluster_labels /= float(num_clusters)
+        cluster_lab = torch.tensor(cluster_lab).float()
+        cluster_lab /= float(num_clusters)
 
         if logger != None:
             sam_img, pha_img, rec_img, pol_img, mas_img, cls_img = plot(
-                x, reconstruction, complex_out, clusters, cluster_labels, logger.Image
+                x, reconstruction, complex_out, clusters, cluster_lab, logger.Image
             )
 
             logger.log(

@@ -1,4 +1,6 @@
 import io
+import os
+import json
 import torch
 import itertools
 import numpy as np
@@ -6,12 +8,13 @@ import matplotlib.pyplot as plt
 import torch.nn.functional as F
 
 from PIL import Image
+from tqdm import tqdm
 from sklearn.cluster import KMeans
+from pycocotools.mask import encode
 
-# from segmentation_models_pytorch.losses import DiceLoss
+from sklearn.preprocessing import MinMaxScaler
 from scipy.optimize import linear_sum_assignment
 from scipy.ndimage import binary_opening, binary_closing, uniform_filter
-from sklearn.preprocessing import MinMaxScaler
 
 from skimage import measure
 
@@ -61,7 +64,7 @@ def plot(
         plt.clf()
         plt.close()
 
-        mas_img = SMAP(MinMaxScaler().fit_transform(clusters[i].cpu().detach().numpy()))
+        mas_img = SMAP(clusters[i].cpu().detach().numpy())
         lab_img = SMAP(cluster_labels[i].cpu().detach().numpy())
 
         img_s.append(img_func(img))
@@ -95,16 +98,6 @@ def polar_distance_loss(angles, boxes, similarities):
     m_similarities_pairs = 1 - similarities[indices[:, 0], indices[:, 1]].long()
 
     return (m_similarities_pairs - m_polar_distance).mean()
-
-
-# def local_contrast_loss(angles, kernel_size=3):
-#     contrast = F.unfold(angles, kernel_size)
-#     indices = torch.combinations(torch.arange(contrast.shape[1]))
-
-#     theta1 = contrast[:, indices[:, 0]]
-#     theta2 = contrast[:, indices[:, 1]]
-#     dist = polar_distance(theta1, theta2)  # .sum(dim=1)
-#     return dist.mean()
 
 
 def mask_iou(
@@ -144,8 +137,30 @@ def bipartite_mask_matching(outputs, targets):
     return torch.tensor(indices).long()
 
 
+@torch.no_grad()
+def generate_masks(model, dataset, device, root_dir, num_clusters):
+    model.eval()
+
+    result = {}
+
+    dataloader = iter(dataset)
+    for batch_idx, (x, y) in enumerate(tqdm(dataloader, total=len(dataset))):
+        x = x.to(device).float().unsqueeze(0)
+
+        _, _, complex_out, _ = model(x)
+        cluster_lab, cluster_chn = apply_kmeans(complex_out, n_clusters=num_clusters)
+
+        mask_strings = []
+        for chn in cluster_chn[0]:
+            mask_data = encode(np.asfortranarray(chn).astype(np.uint8))
+            mask_data["counts"] = mask_data["counts"].decode("ascii")
+            mask_strings.append(mask_data)
+
+        result[batch_idx] = mask_strings
+    return result
+
+
 def apply_kmeans(complex_output, n_clusters=5, uniform_size=7, min_area_size=0.005):
-    n_clusters -= 1
     b, _, h, w = complex_output.shape
     cluster_lab = np.zeros((b, h, w))
     cluster_chn = np.zeros((b, n_clusters, h, w))
@@ -194,7 +209,7 @@ def apply_kmeans(complex_output, n_clusters=5, uniform_size=7, min_area_size=0.0
         cls_img = np.argmax(cls_img, axis=0)
         cls_chn = np.zeros((n_clusters, h, w))
 
-        for cls_idx in range(cls_img.max()):
+        for cls_idx in range(n_clusters):
             cls_area = np.zeros((h, w))
             cls_area[cls_img == cls_idx] = 1
             cls_chn[cls_idx] = cls_area

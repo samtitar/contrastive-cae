@@ -297,3 +297,26 @@ class ComplexAutoEncoder(nn.Module):
         # Reconstruct from magnitudes and cluster from phases
         reconstruction = self.output_model(complex_output.abs()).sigmoid()
         return complex_latent, reconstruction, complex_output, clusters
+
+    def encode(self, x, masks=None):
+        complex_input = self.collapse(x, torch.zeros_like(x))
+
+        if masks != None:
+            masks = masks.float()
+            complex_input = self.extend_and_apply(complex_input, masks)
+
+        # Encode image
+        z, _, shape1 = self.down1(complex_input)
+        z, _, shape2 = self.down2(z)
+        z, _, shape3 = self.down3(z)
+        z, _, shape4 = self.down4(z)
+        z, _, shape5 = self.down5(z)
+
+        if masks != None:
+            z_masks = resize(masks, z.shape[-2:])
+            z = self.extend_and_apply(z, z_masks)
+
+        # Feature flattening
+        z_shape = z.shape
+        z = z.flatten(start_dim=1)
+        return self.linear1(z)

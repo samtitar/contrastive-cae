@@ -9,7 +9,8 @@ import torch.nn as nn
 
 import torchvision
 
-from data_utils.datasets import NpzDataset
+from utils import generate_masks
+from data_utils.datasets import MaskedDataset
 from models.cae.ComplexAutoEncoder import ComplexAutoEncoder
 
 
@@ -148,7 +149,7 @@ if __name__ == "__main__":
         np.random.seed(worker_seed)
         random.seed(worker_seed)
 
-    train_batch_size = args.train_batch_size
+    train_batch_size = args.train_batch_size if args.training_type != "mas" else 1
 
     if not os.path.isdir(args.outdir_path):
         os.mkdir(args.outdir_path)
@@ -172,6 +173,31 @@ if __name__ == "__main__":
         num_workers=args.num_workers,
         persistent_workers=True,
     )
+
+    if args.training_type == "mas":
+        mask_data = generate_masks(
+            model,
+            train_set,
+            device,
+            args.dataset_root,
+            num_clusters=args.num_clusters,
+        )
+
+        train_set = MaskedDataset(
+            getattr(torchvision.datasets, args.dataset),
+            mask_data,
+            base_dataset_kwargs=dict({"transform": train_transforms}, **tsk),
+        )
+
+        train_loader = torch.utils.data.DataLoader(
+            train_set,
+            batch_size=args.train_batch_size,
+            shuffle=True,
+            worker_init_fn=seed_worker,
+            generator=g,
+            num_workers=args.num_workers,
+            persistent_workers=True,
+        )
 
     for epoch in range(args.epochs):
         engine.eval_epoch(
