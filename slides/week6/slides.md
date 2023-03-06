@@ -37,6 +37,13 @@ Complex Valued Autoencoders for Object Discovery
     -   Copy information to each channel
     -   At each convolutional block
 
+---
+
+### RGB Training
+
+-   Outputs still grayscale
+-   Magnitude encoding fixed
+
 <style>
     h1, h2, h3, h4, h5 {
         color: #6b32a8
