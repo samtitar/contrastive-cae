@@ -15,6 +15,7 @@ from pycocotools.mask import encode
 from sklearn.preprocessing import MinMaxScaler
 from scipy.optimize import linear_sum_assignment
 from scipy.ndimage import binary_opening, binary_closing, uniform_filter
+from scipy.signal import find_peaks
 
 from skimage import measure
 
@@ -24,25 +25,78 @@ CMAP = matplotlib.colormaps["hsv"]
 SMAP = matplotlib.colormaps["viridis"]
 
 
+def histd(x, bins=255, min=0.0, max=1.0):
+
+    if len(x.shape) == 4:
+        n_samples, n_chns, _, _ = x.shape
+    elif len(x.shape) == 2:
+        n_samples, n_chns = 1, 1
+    else:
+        raise AssertionError("The dimension of input tensor should be 2 or 4.")
+
+    hist_torch = torch.zeros(n_samples, n_chns, bins).to(x.device)
+    delta = (max - min) / (bins - 1)
+    BIN_Table = torch.arange(start=0, end=bins + 1, step=1) * delta
+
+    for dim in range(0, bins, 1):
+        h_r = BIN_Table[dim].item() if dim > 0 else 0
+        h_r_sub_1 = BIN_Table[dim - 1].item()
+        h_r_plus_1 = BIN_Table[dim + 1].item()
+
+        mask_sub = ((h_r > x) & (x >= h_r_sub_1)).float()
+        mask_plus = ((h_r_plus_1 > x) & (x >= h_r)).float()
+
+        hist_torch[:, :, dim] += torch.sum(
+            ((x - h_r_sub_1) * mask_sub).view(n_samples, n_chns, -1), dim=-1
+        )
+        hist_torch[:, :, dim] += torch.sum(
+            ((h_r_plus_1 - x) * mask_plus).view(n_samples, n_chns, -1), dim=-1
+        )
+
+    return hist_torch / hist_torch.sum(axis=-1, keepdim=True)
+
+
+def discrete_phases(phases, num_bins):
+    b, _, h, w = phases.shape
+
+    angles = torch.linspace(-np.pi, np.pi, num_bins)
+    phases = phases.mean(dim=1).flatten(start_dim=1)
+
+    result = []
+    for i in range(b):
+        distances = []
+
+        for angle in angles:
+            distances.append(polar_distance(phases[i], angle))
+        # result.append((-1 * torch.stack(distances)).argmax(dim=0).view(h, w))
+        result.append((-1 * torch.stack(distances)).softmax(dim=0).view(num_bins, h, w))
+    return torch.stack(result)
+
+
 def plot(
-    input_image, reconstruction, complex_output, clusters, cluster_labels, img_func
+    input_image,
+    reconstruction,
+    complex_output,
+    clusters,
+    cluster_labels,
+    img_func,
 ):
     img_s, img_c, img_r, img_p, img_m, img_l = [], [], [], [], [], []
 
-    clusters = torch.argmax(clusters, dim=1)
+    # clusters = torch.argmax(clusters, dim=1)
 
     for i in range(len(input_image)):
         img = input_image[i].cpu().numpy().transpose(1, 2, 0)
         img = (img - img.min()) / (img.max() - img.min())
 
-        pha = complex_output.angle()[i].cpu().detach().mean(dim=0).numpy() + np.pi
+        pha = complex_output.angle()[i].cpu().detach().mean(dim=0).numpy()
         mag = complex_output.abs()[i].cpu().detach().mean(dim=0).numpy()
 
         # # Plot color mapping
         # pha = np.tile(np.linspace(0, 2 * np.pi, 32), (32, 1))
         # mag = np.ones_like(pha)
 
-        pha_norm = pha / (2 * np.pi)
+        pha_norm = (pha + np.pi) / (2 * np.pi)
 
         pha_img = CMAP(pha_norm)
 
@@ -51,7 +105,7 @@ def plot(
 
         pha_flt = pha.reshape(pha.shape[0] * pha.shape[1])
         mag_flt = mag.reshape(mag.shape[0] * mag.shape[1])
-        pha_col = CMAP(pha_flt / (2 * np.pi))
+        pha_col = CMAP((pha_flt + np.pi) / (2 * np.pi))
 
         fig = plt.figure()
         ax = fig.add_subplot(projection="polar")
@@ -78,26 +132,29 @@ def plot(
 
 
 def polar_distance(theta1, theta2):
-    dist = (theta2 - theta1).abs()
+    dist = abs(theta2 - theta1)
     mask = dist > np.pi
     dist[mask] = 2 * np.pi - dist[mask]
 
     return dist / np.pi
 
 
-def polar_distance_loss(angles, boxes, similarities):
-    indices = torch.combinations(torch.arange(len(boxes)))
-    m_angles = torch.zeros((len(boxes),)).to(angles.device)
+def soft_mas_to_hard(mas):
+    mas_idx = mas.argmax(dim=1, keepdim=True)
+    mas_har = torch.zeros_like(mas)
+    mas_har.scatter_(1, mas_idx, 1)
 
-    for i, box in enumerate(boxes):
-        m_angles[i] = angles[box[0] : box[2], box[1] : box[3]].mean()
+    return mas_har
 
-    m_angles_pairs = m_angles[indices]
-    m_polar_distance = polar_distance(m_angles_pairs[:, 0], m_angles_pairs[:, 1])
 
-    m_similarities_pairs = 1 - similarities[indices[:, 0], indices[:, 1]].long()
+def indx_mas_to_hard(mas, c_dim=None):
+    if c_dim == None:
+        c_dim = mas.max() + 1
 
-    return (m_similarities_pairs - m_polar_distance).mean()
+    mas_har = torch.zeros_like(mas).repeat(1, c_dim, 1, 1)
+    mas_har.scatter_(1, mas, 1)
+
+    return mas_har.float()
 
 
 def mask_iou(
@@ -125,42 +182,40 @@ def mask_iou(
 
 
 def bipartite_mask_matching(outputs, targets):
-    B, C1, H, W = outputs.shape
-    B, C2, H, W = targets.shape
+    C1, H, W = outputs.shape
+    C2, H, W = targets.shape
 
     assert C1 == C2, "Output channels must match target channels"
 
-    indices = np.zeros((B, C1))
-    for i in range(B):
-        C = -mask_iou(outputs[i], targets[i])
-        _, indices[i] = linear_sum_assignment(C)
+    C = -mask_iou(outputs, targets)
+    _, indices = linear_sum_assignment(C)
     return torch.tensor(indices).long()
 
 
-@torch.no_grad()
-def generate_masks(model, dataset, device, root_dir, num_clusters):
-    model.eval()
+# @torch.no_grad()
+# def generate_masks(model, dataset, device, root_dir, num_clusters):
+#     model.eval()
 
-    result = {}
+#     result = {}
 
-    dataloader = iter(dataset)
-    for batch_idx, (x, y) in enumerate(tqdm(dataloader, total=len(dataset))):
-        x = x.to(device).float().unsqueeze(0)
+#     dataloader = iter(dataset)
+#     for batch_idx, (x, y) in enumerate(tqdm(dataloader, total=len(dataset))):
+#         x = x.to(device).float().unsqueeze(0)
 
-        _, _, complex_out, _ = model(x)
-        cluster_lab, cluster_chn = apply_kmeans(complex_out, n_clusters=num_clusters)
+#         _, _, complex_out, _ = model(x)
+#         cluster_lab, cluster_chn = apply_kmeans(complex_out, n_clusters=num_clusters)
 
-        mask_strings = []
-        for chn in cluster_chn[0]:
-            mask_data = encode(np.asfortranarray(chn).astype(np.uint8))
-            mask_data["counts"] = mask_data["counts"].decode("ascii")
-            mask_strings.append(mask_data)
+#         mask_strings = []
+#         for chn in cluster_chn[0]:
+#             mask_data = encode(np.asfortranarray(chn).astype(np.uint8))
+#             mask_data["counts"] = mask_data["counts"].decode("ascii")
+#             mask_strings.append(mask_data)
 
-        result[batch_idx] = mask_strings
-    return result
+#         result[batch_idx] = mask_strings
+#     return result
 
 
-def apply_kmeans(complex_output, n_clusters=5, uniform_size=7, min_area_size=0.005):
+def apply_kmeans(complex_output, n_clusters=20, uniform_size=7, min_area_size=0.005):
     b, _, h, w = complex_output.shape
     cluster_lab = np.zeros((b, h, w))
     cluster_chn = np.zeros((b, n_clusters, h, w))
@@ -178,7 +233,7 @@ def apply_kmeans(complex_output, n_clusters=5, uniform_size=7, min_area_size=0.0
         # 1. Scale phases
         h, w, c = pha_img.shape
         pha_img = pha_img.reshape((h * w), c)
-        pha_img = MinMaxScaler().fit_transform(pha_img)
+        # pha_img = MinMaxScaler().fit_transform(pha_img)
 
         # 2. Apply k-means to phases
         kmc_img = KMeans(n_clusters, n_init=10).fit_transform(pha_img)
@@ -216,5 +271,7 @@ def apply_kmeans(complex_output, n_clusters=5, uniform_size=7, min_area_size=0.0
 
         cluster_lab[i] = cls_img
         cluster_chn[i] = cls_chn
+
+        cluster_lab[i] = kmc_img.reshape(h, w)
 
     return cluster_lab, cluster_chn

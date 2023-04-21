@@ -36,7 +36,7 @@ def init_magnitude_bias(fan_in, bias):
 
 
 def get_complex_number(magnitude, phase):
-    return magnitude * torch.exp(phase * 1j)
+    return magnitude * torch.exp(1j * phase)
 
 
 def complex_tensor_to_real(complex_tensor, dim=-1):
@@ -186,12 +186,61 @@ class ComplexReLU(nn.Module):
         return m, phi
 
 
+class ComplexSigmoid(nn.Module):
+    def __init__(self):
+        super(ComplexSigmoid, self).__init__()
+
+    def forward(self, m: torch.FloatTensor, phi: torch.FloatTensor):
+        m = torch.sigmoid(m)
+        return m, phi
+
+
 class ComplexCollapse(nn.Module):
     def __init__(self):
         super(ComplexCollapse, self).__init__()
 
     def forward(self, m: torch.FloatTensor, phi: torch.FloatTensor):
         return get_complex_number(m, phi)
+
+
+class ComplexPhaseCollapse(nn.Module):
+    def __init__(self):
+        super(ComplexPhaseCollapse, self).__init__()
+
+    def forward(self, m: torch.FloatTensor, phi: torch.FloatTensor):
+        b, c, h, w = phi.shape
+
+        phi = stable_angle(get_complex_number(m, phi).mean(dim=1))
+
+        # # Magnitude-WeightedAvgPooling
+        # phi = (m * phi).sum(dim=1) / (m.sum(dim=1) + 1e-8)
+
+        # # Magnitude-SoftmaxPooling
+        # phi = (F.softmax(m, dim=1) * phi).sum(dim=1)
+
+        # # Magnitude-HardmaxPooling
+        # phi = (F.gumbel_softmax(m, dim=1, hard=True) * phi).sum(dim=1)
+
+        # # Magnitude-MaxPooling
+        # idx = torch.argmax(m, dim=1)
+        # print(idx.min(), idx.max())
+        # print(idx.flatten(start_dim=1).shape, phi.flatten(start_dim=2).shape)
+
+        # idx_f, phi_f = idx.flatten(start_dim =1), phi.flatten(start_dim=2)
+
+        # phi = (
+        #     phi.flatten(start_dim=2)
+        #     .gather(dim=1, index=idx.flatten(start_dim=1))
+        #     .view_as(idx)
+        # )
+
+        # # Phase-AvgPooling
+        # phi = phi.mean(dim=1)
+
+        if len(phi.shape) == 3:
+            phi = phi.unsqueeze(1)
+
+        return get_complex_number(m, phi.repeat(1, c, 1, 1))
 
 
 class ComplexSequential(nn.Sequential):
@@ -257,13 +306,16 @@ class ComplexMaxUnpool2d(nn.Module):
     def forward(self, x: torch.cfloat, index: torch.LongTensor, out_shape: tuple):
         b, c = x.shape[:2]
 
-        x = x.flatten(start_dim=2)
+        m = x.abs().flatten(start_dim=2)
         index = index.flatten(start_dim=2)
 
-        empty = torch.zeros((b, c, out_shape[0] * out_shape[1])).to(x.device).cfloat()
+        empty = torch.zeros((b, c, out_shape[0] * out_shape[1])).to(x.device).float()
 
-        return empty.scatter_(dim=2, index=index, src=x).view(
-            b, c, out_shape[0], out_shape[1]
+        return get_complex_number(
+            empty.scatter_(dim=2, index=index, src=m).view(
+                b, c, out_shape[0], out_shape[1]
+            ),
+            F.interpolate(stable_angle(x), out_shape, mode="nearest"),
         )
 
 

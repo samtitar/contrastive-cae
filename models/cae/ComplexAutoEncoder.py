@@ -11,19 +11,47 @@ from torchvision.transforms.functional import resize
 
 
 class ComplexLin(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int):
+    def __init__(self, in_channels: int, out_channels: int, activation=None):
         super().__init__()
+
+        self.activation = activation
 
         self.linear = ComplexLayers.ComplexLinear(in_channels, out_channels)
         self.layernorm = ComplexLayers.ComplexLayerNorm(out_channels)
-        self.relu = ComplexLayers.ComplexReLU()
+        if activation == "relu":
+            self.activation_func = ComplexLayers.ComplexReLU()
+        elif activation == "sigmoid":
+            self.activation_func = ComplexLayers.ComplexSigmoid()
         self.collapse = ComplexLayers.ComplexCollapse()
 
     def forward(self, x):
         m, p = self.linear(x)
         m, p = self.layernorm(m, p)
-        m, p = self.relu(m, p)
+        if self.activation != None:
+            m, p = self.activation_func(m, p)
         return self.collapse(m, p)
+
+
+class Lin(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, activation=None):
+        super().__init__()
+
+        self.activation = activation
+
+        self.linear = nn.Linear(in_channels, out_channels)
+        # self.layernorm = nn.LayerNorm(out_channels)
+
+        if activation == "relu":
+            self.activation_func = nn.ReLU()
+        elif activation == "sigmoid":
+            self.activation_func = nn.Sigmoid()
+
+    def forward(self, x):
+        y = self.linear(x)
+        # y = self.layernorm(y)
+        if self.activation != None:
+            y = self.activation_func(y)
+        return y
 
 
 class ComplexConv(nn.Module):
@@ -108,8 +136,9 @@ class ComplexConvDBlock3(nn.Module):
         self.maxpool = ComplexLayers.ComplexMaxPool2d((2, 2))
 
     def forward(self, x):
-        z = self.conv1(x)
-        z = self.conv2(z)
+        z1 = self.conv1(x)
+        z = self.conv2(z1)
+        z = self.conv3(z) + z1
         return self.maxpool(z) + (tuple(z.shape[2:]),)
 
 
@@ -117,12 +146,14 @@ class ComplexConvUBlock2(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
 
-        self.maxpool = ComplexLayers.ComplexUpSampling2d()
+        self.upsample = ComplexLayers.ComplexUpSampling2d()
+        # self.upsample = ComplexLayers.ComplexMaxUnpool2d()
         self.conv1 = ComplexConv(in_channels, out_channels, 3, 1, 1)
         self.conv2 = ComplexConv(out_channels, out_channels, 3, 1, 1)
 
-    def forward(self, x, out_shape):
-        z = self.maxpool(x, out_shape)
+    def forward(self, x, idx, out_shape):
+        # z = self.upsample(x, idx, out_shape)
+        z = self.upsample(x, out_shape)
         z = self.conv1(z)
         return self.conv2(z)
 
@@ -131,46 +162,18 @@ class ComplexConvUBlock3(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
 
-        self.maxpool = ComplexLayers.ComplexUpSampling2d()
+        self.upsample = ComplexLayers.ComplexUpSampling2d()
+        # self.upsample = ComplexLayers.ComplexMaxUnpool2d()
         self.conv1 = ComplexConv(in_channels, out_channels, 3, 1, 1)
         self.conv2 = ComplexConv(out_channels, out_channels, 3, 1, 1)
         self.conv3 = ComplexConv(out_channels, out_channels, 3, 1, 1)
 
-    def forward(self, x, out_shape):
-        z = self.maxpool(x, out_shape)
-        z = self.conv1(z)
-        z = self.conv2(z)
-        return self.conv3(z)
-
-
-class ConvUBlock2(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-
-        self.upsample = nn.Upsample(scale_factor=2)
-        self.conv1 = Conv(in_channels, out_channels, 3, 1, 1)
-        self.conv2 = Conv(out_channels, out_channels, 3, 1, 1)
-
-    def forward(self, x):
-        z = self.upsample(x)
-        z = self.conv1(z)
-        return self.conv2(z)
-
-
-class ConvUBlock3(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-
-        self.upsample = nn.Upsample(scale_factor=2)
-        self.conv1 = Conv(in_channels, out_channels, 3, 1, 1)
-        self.conv2 = Conv(out_channels, out_channels, 3, 1, 1)
-        self.conv3 = Conv(out_channels, out_channels, 3, 1, 1)
-
-    def forward(self, x):
-        z = self.upsample(x)
-        z = self.conv1(z)
-        z = self.conv2(z)
-        return self.conv3(z)
+    def forward(self, x, idx, out_shape):
+        # z = self.upsample(x, idx, out_shape)
+        z = self.upsample(x, out_shape)
+        z1 = self.conv1(z)
+        z = self.conv2(z1)
+        return self.conv3(z) + z1
 
 
 class ComplexAutoEncoder(nn.Module):
@@ -202,121 +205,80 @@ class ComplexAutoEncoder(nn.Module):
         self.up2 = ComplexConvUBlock2(128, 64)
         self.up1 = ComplexConvUBlock2(64, in_channels)
 
-        self.output_model = nn.Conv2d(in_channels, in_channels, 1, 1)
+        self.phase_collapse = ComplexLayers.ComplexPhaseCollapse()
 
-        self.clustering5 = ConvUBlock3(512, 512)
-        self.clustering4 = ConvUBlock3(512, 256)
-        self.clustering3 = ConvUBlock3(256, 128)
-        self.clustering2 = ConvUBlock2(128, 64)
-        self.clustering1 = ConvUBlock2(64, num_clusters)
-
-        self.extend_and_apply = lambda x, m: x * self.collapse(
-            m.expand(x.shape), m.expand(x.shape)
+        self.output_model = nn.Sequential(
+            nn.Conv2d(in_channels, in_channels, 1, 1),
         )
-
-        def compute_feature_size():
-            x = torch.zeros(1, self.in_channels, in_height, in_width)
-            complex_input = self.collapse(x, torch.zeros_like(x))
-
-            z, _, _ = self.down1(complex_input)
-            z, _, _ = self.down2(z)
-            z, _, _ = self.down3(z)
-            z, _, _ = self.down4(z)
-            z, _, _ = self.down5(z)
-
-            return z.shape[1], z.shape[2], z.shape[3]
-
-        fc, fh, fw = compute_feature_size()
-
-        self.linear1 = ComplexLin(fc * fh * fw, num_features)
-        self.linear2 = ComplexLin(num_features, fc * fh * fw)
 
         self._init_output_model()
 
     def _init_output_model(self):
-        nn.init.constant_(self.output_model.weight, 1)
-        nn.init.constant_(self.output_model.bias, 0)
+        for layer in self.output_model.children():
+            if hasattr(layer, "weight"):
+                nn.init.constant_(layer.weight, 1)
+                nn.init.constant_(layer.bias, -0.1)
 
-    def masked_train(self):
-        self.eval()
-        self.clustering5.train()
-        self.clustering4.train()
-        self.clustering3.train()
-        self.clustering2.train()
-        self.clustering1.train()
-
-    def resize(self, x):
-        return x
-
-    def forward(self, x, masks=None):
+    def forward(self, x, phase=None):
         b = x.shape[0]
-        complex_input = self.collapse(x, torch.zeros_like(x))
 
-        if masks != None:
-            masks = masks.float()
-            complex_input = self.extend_and_apply(complex_input, masks)
+        if phase == None:
+            phase = torch.zeros_like(x)
+        complex_input = self.collapse(x, phase)
 
         # Encode image
-        z, _, shape1 = self.down1(complex_input)
-        z, _, shape2 = self.down2(z)
-        z, _, shape3 = self.down3(z)
-        z, _, shape4 = self.down4(z)
-        z, _, shape5 = self.down5(z)
-
-        if masks != None:
-            z_masks = resize(masks, z.shape[-2:])
-            z = self.extend_and_apply(z, z_masks)
-
-        # Feature flattening
-        z_shape = z.shape
-        z = z.flatten(start_dim=1)
-        complex_latent = self.linear1(z)
-        z = self.linear2(complex_latent)
-        z = z.view(z_shape)
-
-        cz = ComplexLayers.stable_angle(z)
+        z, idx1, shape1 = self.down1(complex_input)
+        z, idx2, shape2 = self.down2(z)
+        z, idx3, shape3 = self.down3(z)
+        z, idx4, shape4 = self.down4(z)
+        z, idx5, shape5 = self.down5(z)
 
         # Deocde features
-        z5 = self.up5(z, shape5)
-        z4 = self.up4(z5, shape4)
-        z3 = self.up3(z4, shape3)
-        z2 = self.up2(z3, shape2)
-        complex_output = self.up1(z2, shape1)
+        z = self.up5(z, idx5, shape5)
+        z = self.up4(z, idx4, shape4)
+        z = self.up3(z, idx3, shape3)
+        z = self.up2(z, idx2, shape2)
+        z = self.up1(z, idx1, shape1)
 
-        # Create cluster masks
-        cz = self.clustering5(cz)
-        cz = self.clustering4(cz + (ComplexLayers.stable_angle(z5) + np.pi) / np.pi * 2)
-        cz = self.clustering3(cz + (ComplexLayers.stable_angle(z4) + np.pi) / np.pi * 2)
-        cz = self.clustering2(cz + (ComplexLayers.stable_angle(z3) + np.pi) / np.pi * 2)
-        cz = self.clustering1(cz + (ComplexLayers.stable_angle(z2) + np.pi) / np.pi * 2)
-        clusters = F.softmax(cz, dim=1)
-
-        if masks != None:
-            complex_output = self.extend_and_apply(complex_output, masks)
+        complex_output = self.phase_collapse(
+            z.abs() + 0.1, ComplexLayers.stable_angle(z)
+        )
 
         # Reconstruct from magnitudes and cluster from phases
         reconstruction = self.output_model(complex_output.abs()).sigmoid()
-        return complex_latent, reconstruction, complex_output, clusters
+        return (
+            reconstruction,
+            complex_output,
+            (z.abs() + 0.1, ComplexLayers.stable_angle(z)),
+        )
 
-    def encode(self, x, masks=None):
-        complex_input = self.collapse(x, torch.zeros_like(x))
 
-        if masks != None:
-            masks = masks.float()
-            complex_input = self.extend_and_apply(complex_input, masks)
+class SegmentationHead(nn.Module):
+    def __init__(self, image_height, image_width, num_clusters, num_segments):
+        super().__init__()
 
-        # Encode image
-        z, _, shape1 = self.down1(complex_input)
-        z, _, shape2 = self.down2(z)
-        z, _, shape3 = self.down3(z)
-        z, _, shape4 = self.down4(z)
-        z, _, shape5 = self.down5(z)
+        self.num_clusters = num_clusters
+        self.num_segments = num_segments
 
-        if masks != None:
-            z_masks = resize(masks, z.shape[-2:])
-            z = self.extend_and_apply(z, z_masks)
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=3)
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3)
+        self.conv3 = nn.Conv2d(128, 256, kernel_size=3)
+        self.conv4 = nn.Conv2d(256, 256, kernel_size=3)
 
-        # Feature flattening
-        z_shape = z.shape
-        z = z.flatten(start_dim=1)
-        return self.linear1(z)
+        x = torch.zeros(1, 1, image_height, image_width)
+        x = F.max_pool2d(self.conv1(x).relu(), (3, 3))
+        x = F.max_pool2d(self.conv2(x).relu(), (3, 3))
+        x = F.max_pool2d(self.conv3(x).relu(), (2, 2))
+        x = F.max_pool2d(self.conv4(x).relu(), (2, 2))
+        fw, fh = x.shape[2:]
+
+        self.fc = nn.Linear(256 * fh * fw, num_clusters * num_segments)
+
+    def forward(self, x):
+        x = F.max_pool2d(self.conv1(x).relu(), (3, 3))
+        x = F.max_pool2d(self.conv2(x).relu(), (3, 3))
+        x = F.max_pool2d(self.conv3(x).relu(), (2, 2))
+        x = F.max_pool2d(self.conv4(x).relu(), (2, 2))
+
+        x = self.fc(x.flatten(start_dim=1))
+        return x.view(-1, self.num_clusters, self.num_segments).softmax(dim=-1)

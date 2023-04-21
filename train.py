@@ -1,17 +1,18 @@
 import os
+import copy
 import random
 import engine
 import argparse
 import numpy as np
+import data_utils.datasets as custom_datasets
 
 import torch
 import torch.nn as nn
 
 import torchvision
 
-from utils import generate_masks
-from data_utils.datasets import MaskedDataset
-from models.cae.ComplexAutoEncoder import ComplexAutoEncoder
+from data_utils.transforms import DataAugmentationMoCAE
+from models.cae.ComplexAutoEncoder import ComplexAutoEncoder, SegmentationHead
 
 
 def parse_args():
@@ -23,23 +24,23 @@ def parse_args():
         else:
             raise argparse.ArgumentTypeError("Unsupported value encountered.")
 
-    parser = argparse.ArgumentParser("Set NIJNtje model", add_help=False)
+    parser = argparse.ArgumentParser("Set MoCAE model", add_help=False)
 
     # Model settings
     parser.add_argument("--image-channels", default=1, type=int)
     parser.add_argument("--image-height", default=224, type=int)
     parser.add_argument("--image-width", default=224, type=int)
     parser.add_argument("--num-features", default=1024, type=int)
-    parser.add_argument("--num-clusters", default=20, type=int)
+    parser.add_argument("--num-clusters", default=100, type=int)
 
     # Training settings
-    parser.add_argument(
-        "--training-type", default="pre", choices=["pre", "con", "mas", "dum"]
-    )
+    parser.add_argument("--training-type", default="pre", choices=["pre", "mom", "seg"])
     parser.add_argument("--dataset", default="StanfordCars", type=str)
     parser.add_argument("--dataset-root", default="datasets")
     parser.add_argument("--epochs", default=1000, type=int)
-    parser.add_argument("--lr", default=0.001, type=float)
+    parser.add_argument("--lr", default=0.0001, type=float)
+    parser.add_argument("--teacher-momentum", default=0.996, type=float)
+    parser.add_argument("--student-augments", default=8, type=int)
     parser.add_argument("--train-batch-size", default=32, type=int)
     parser.add_argument("--eval-batch-size", default=32, type=int)
 
@@ -83,24 +84,40 @@ if __name__ == "__main__":
         model.load_state_dict(sd)
     model.to(device)
 
-    if args.training_type == "mas":
-        for n, p in model.named_parameters():
-            if "clustering" not in n:
-                p.requires_grad = False
-
     print(sum(p.numel() for p in model.parameters() if p.requires_grad))
+    print(
+        [
+            param.data
+            for name, param in model.named_parameters()
+            if name == "output_model.0.bias"
+        ]
+    )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-
-    train_transforms_list = [
-        torchvision.transforms.ToTensor(),
-        torchvision.transforms.Resize((args.image_height, args.image_width)),
-    ]
 
     eval_transforms_list = [
         torchvision.transforms.ToTensor(),
         torchvision.transforms.Resize((args.image_height, args.image_width)),
     ]
+
+    if args.training_type == "pre":
+        train_transforms_list = [
+            torchvision.transforms.AutoAugment(
+                torchvision.transforms.AutoAugmentPolicy.IMAGENET
+            ),
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Resize((args.image_height, args.image_width)),
+        ]
+    elif args.training_type == "mom":
+        train_transforms_list = [
+            DataAugmentationMoCAE(args.student_augments),
+            torchvision.transforms.Resize((args.image_height, args.image_width)),
+        ]
+    elif args.training_type == "seg":
+        train_transforms_list = [
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Resize((args.image_height, args.image_width)),
+        ]
 
     if args.image_channels == 1:
         train_transforms_list.append(torchvision.transforms.Grayscale())
@@ -111,8 +128,12 @@ if __name__ == "__main__":
 
     tsk = {"root": args.dataset_root}
     esk = {"root": args.dataset_root}
+    ds_source = torchvision.datasets
 
-    if args.dataset == "Caltech256":
+    if args.dataset == "StanfordCars":
+        tsk["split"] = "train"
+        esk["split"] = "test"
+    elif args.dataset == "Caltech256":
         tsk["download"] = True
         esk["download"] = True
     elif args.dataset == "ImageFolder":
@@ -127,77 +148,81 @@ if __name__ == "__main__":
 
         tsk["target_transform"] = lambda x: 1
         esk["target_transform"] = lambda x: 1
+    elif args.dataset == "CelebAMaskHQ":
+        ds_source = custom_datasets
+        tsk["partition"] = "train"
+        esk["partition"] = "val"
+    elif args.dataset == "CLEVRMask":
+        ds_source = custom_datasets
+        tsk["partition"] = "train"
+        esk["partition"] = "test"
 
-    train_set = getattr(torchvision.datasets, args.dataset)(
-        transform=train_transforms, **tsk
-    )
+    train_set = getattr(ds_source, args.dataset)(transform=train_transforms, **tsk)
+    eval_set = getattr(ds_source, args.dataset)(transform=eval_transforms, **esk)
 
-    eval_set = getattr(torchvision.datasets, args.dataset)(
-        transform=eval_transforms, **esk
-    )
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
 
-    g = torch.Generator()
-    g.manual_seed(42)
+    train_batch_size = args.train_batch_size
 
-    torch.backends.cudnn.benchmark = False
-    torch.manual_seed(42)
-    np.random.seed(42)
-    random.seed(42)
+    if not os.path.isdir(args.outdir_path):
+        os.mkdir(args.outdir_path)
 
     def seed_worker(worker_id):
         worker_seed = torch.initial_seed() % 2**32
         np.random.seed(worker_seed)
         random.seed(worker_seed)
 
-    train_batch_size = args.train_batch_size if args.training_type != "mas" else 1
-
-    if not os.path.isdir(args.outdir_path):
-        os.mkdir(args.outdir_path)
+    g = torch.Generator()
+    g.manual_seed(args.seed)
 
     train_loader = torch.utils.data.DataLoader(
         train_set,
         batch_size=train_batch_size,
         shuffle=True,
-        worker_init_fn=seed_worker,
-        generator=g,
         num_workers=args.num_workers,
         persistent_workers=True,
+        worker_init_fn=seed_worker,
+        generator=g,
     )
 
     eval_loader = torch.utils.data.DataLoader(
         eval_set,
         batch_size=args.eval_batch_size,
         shuffle=False,
-        worker_init_fn=seed_worker,
-        generator=g,
         num_workers=args.num_workers,
         persistent_workers=True,
+        worker_init_fn=seed_worker,
+        generator=g,
     )
 
-    if args.training_type == "mas":
-        mask_data = generate_masks(
-            model,
-            train_set,
-            device,
-            args.dataset_root,
-            num_clusters=args.num_clusters,
+    tkwargs = {}
+    if args.training_type == "mom":
+        teacher = ComplexAutoEncoder(
+            args.image_channels,
+            args.image_height,
+            args.image_width,
+            args.num_features,
+            args.num_clusters,
         )
 
-        train_set = MaskedDataset(
-            getattr(torchvision.datasets, args.dataset),
-            mask_data,
-            base_dataset_kwargs=dict({"transform": train_transforms}, **tsk),
-        )
+        teacher.load_state_dict(model.state_dict())
+        teacher.to(device)
 
-        train_loader = torch.utils.data.DataLoader(
-            train_set,
-            batch_size=args.train_batch_size,
-            shuffle=True,
-            worker_init_fn=seed_worker,
-            generator=g,
-            num_workers=args.num_workers,
-            persistent_workers=True,
+        for p in teacher.parameters():
+            p.requires_grad = False
+
+        tkwargs["teacher"] = teacher
+        tkwargs["teacher_momentum"] = args.teacher_momentum
+        tkwargs["num_augments"] = args.student_augments
+    elif args.training_type == "seg":
+        seghead = SegmentationHead(
+            args.image_height, args.image_width, args.num_clusters, 20
         )
+        seghead.to(device)
+
+        tkwargs["segm_head"] = seghead
 
     for epoch in range(args.epochs):
         engine.eval_epoch(
@@ -225,6 +250,7 @@ if __name__ == "__main__":
             image_height=args.image_height,
             image_width=args.image_width,
             num_clusters=args.num_clusters,
+            **tkwargs,
         )
 
         torch.save(model.state_dict(), f"{args.outdir_path}/checkpoint{epoch}.pt")
