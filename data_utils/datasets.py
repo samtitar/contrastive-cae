@@ -53,8 +53,23 @@ class Tetrominoes(torch.utils.data.Dataset):
         img = self.images[idx]
         lab = self.labels[idx, :, :, :, 0].argmax(axis=0)
 
-        img = resize(torch.tensor(img).permute(2, 0, 1), (512, 512)).permute(1, 2, 0).numpy()
-        lab = resize(torch.tensor(lab).unsqueeze(0), (512, 512)).permute(1, 2, 0).numpy()
+        img = Image.fromarray(
+            torch.nn.functional.interpolate(
+                torch.tensor(img).permute(2, 0, 1).unsqueeze(0).float(), (512, 512)
+            )[0].long()
+            .permute(1, 2, 0)
+            .numpy()
+            .astype(np.uint8)
+        )
+
+        lab = Image.fromarray(
+            torch.nn.functional.interpolate(
+                torch.tensor(lab).unsqueeze(0).unsqueeze(0).float(), (512, 512)
+            )[0, 0].long()
+            .numpy()
+            .astype(np.uint8)
+        )
+
         return self.transform(img), self.transform(lab)
 
 
