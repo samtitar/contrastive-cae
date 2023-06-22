@@ -4,6 +4,7 @@ import numpy as np
 
 from PIL import Image
 from pycocotools.mask import decode
+from torchvision.transforms.functional import resize
 
 
 class MaskedDataset(torch.utils.data.Dataset):
@@ -28,6 +29,33 @@ class MaskedDataset(torch.utils.data.Dataset):
         if type(entry) == tuple:
             return entry + (entry_masks,)
         return entry, entry_masks
+
+
+class Tetrominoes(torch.utils.data.Dataset):
+    def __init__(self, root, transform, target_transform, partition="train"):
+        self.images = np.load(f"{root}/tetrominoes_images.npy")
+        self.labels = np.load(f"{root}/tetrominoes_labels.npy")
+
+        if partition == "train":
+            self.images = self.images[: int(len(self.images) * 0.9)]
+            self.labels = self.labels[: int(len(self.labels) * 0.9)]
+        else:
+            self.images = self.images[int(len(self.images) * 0.9) :]
+            self.labels = self.labels[int(len(self.labels) * 0.9) :]
+
+        self.transform = transform
+        self.target_transform = target_transform
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        img = self.images[idx]
+        lab = self.labels[idx, :, :, :, 0].argmax(axis=0)
+
+        img = resize(torch.tensor(img).permute(2, 0, 1), (512, 512)).permute(1, 2, 0).numpy()
+        lab = resize(torch.tensor(lab).unsqueeze(0), (512, 512)).permute(1, 2, 0).numpy()
+        return self.transform(img), self.transform(lab)
 
 
 class CelebAMaskHQ:
@@ -116,7 +144,7 @@ class ResizedDataset:
     def __init__(self, dataset, new_length):
         self.dataset = dataset
         self.new_length = new_length
-    
+
     def __len__(self):
         return self.new_length
 

@@ -170,6 +170,10 @@ if __name__ == "__main__":
 
         tsk["target_transform"] = targ_transforms
         esk["target_transform"] = targ_transforms
+    elif args.dataset == "Tetrominoes":
+        ds_source = custom_datasets
+        tsk["target_transform"] = targ_transforms
+        esk["target_transform"] = targ_transforms
 
     train_set = getattr(ds_source, args.dataset)(transform=train_transforms, **tsk)
     eval_set = getattr(ds_source, args.dataset)(transform=eval_transforms, **esk)
