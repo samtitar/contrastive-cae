@@ -12,37 +12,28 @@ from utils import *
 from tqdm.auto import tqdm
 from models.cae.ComplexLayers import stable_angle, get_complex_number
 
-LOG_FREQUENCY = 25
+LOG_FREQUENCY = 100
 
 
 def pre_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
-    image_channels, image_height, image_width, num_clusters = (
+    image_channels, image_height, image_width = (
         kwargs["image_channels"],
         kwargs["image_width"],
         kwargs["image_height"],
-        kwargs["num_clusters"],
     )
 
     model.train()
     running_loss, n_div = 0, 0
 
-    base_phase = (
-        torch.linspace(0, np.pi * 2, image_width)
-        .repeat(image_channels, image_height, 1)
-        .to(device)
-    )
-
     for batch_idx, (x, y) in enumerate(tqdm(dataloader)):
         batch_size = x.shape[0]
         optimizer.zero_grad()
 
-        phase = base_phase.unsqueeze(0).repeat(batch_size, 1, 1, 1)
-
         x = x.to(device).float()
-        reconstruction, complex_out, _ = model(x, phase=phase)
+        reconstruction, complex_out, _ = model(x)
 
         loss_weights = {"rec_loss": 1}
-        loss_dict = {"rec_loss": F.mse_loss(reconstruction, x)}
+        loss_dict = {"rec_loss": F.mse_loss(x, reconstruction)}
 
         loss = sum([v * loss_weights[k] for k, v in loss_dict.items()])
         loss.backward()
@@ -70,11 +61,10 @@ def pre_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
 def mom_train_epoch(
     student, dataloader, optimizer, device, epoch, logger=None, **kwargs
 ):
-    image_channels, image_height, image_width, num_clusters, num_augments = (
+    image_channels, image_height, image_width, num_augments = (
         kwargs["image_channels"],
         kwargs["image_width"],
         kwargs["image_height"],
-        kwargs["num_clusters"],
         kwargs["num_augments"],
     )
 
@@ -84,41 +74,39 @@ def mom_train_epoch(
     student.train()
     running_loss, n_div = 0, 0
 
-    base_phase = (
-        torch.linspace(0, np.pi * 2, image_width)
-        .repeat(image_channels, image_height, 1)
-        .to(device)
-    )
-
     for batch_idx, (x, y) in enumerate(tqdm(dataloader)):
+        x, ox = x[0], x[1]
         batch_size = x.shape[0]
         optimizer.zero_grad()
 
         x_t = x[:, :2].to(device).float().flatten(start_dim=0, end_dim=1)
         x_s = x[:, 2:].to(device).float().flatten(start_dim=0, end_dim=1)
 
-        p_t = base_phase.unsqueeze(0).repeat(batch_size * 2, 1, 1, 1)
-        p_s = base_phase.unsqueeze(0).repeat(batch_size * num_augments, 1, 1, 1)
-
-        reconstruction_t, complex_t, _ = teacher(x_t, phase=p_t)
-        reconstruction_s, complex_s, _ = student(x_s, phase=p_s)
+        with torch.no_grad():
+            reconstruction_t, complex_t, _ = teacher(x_t)
+        reconstruction_s, complex_s, _ = student(x_s)
 
         chw = (image_channels, image_height, image_width)
+
+        x_t = x_t.view(batch_size, 2, *chw)
+        x_s = x_s.view(batch_size, num_augments, *chw)
+        reconstruction_s = reconstruction_s.view(batch_size, num_augments, *chw)
+
         complex_t = complex_t.view(batch_size, 2, *chw).mean(dim=2)
         complex_s = complex_s.view(batch_size, num_augments, *chw).mean(dim=2)
 
-        loss_weights = {"rec_loss": 1, "seg_loss": 0.001}
+        dist_loss = 0
+
+        for i in range(num_augments):
+            for j in range(2):
+                dist_loss += cos_distance(
+                    stable_angle(complex_s[:, i]), stable_angle(complex_t[:, j])
+                ).mean()
+
+        loss_weights = {"rec_loss": 1, "con_loss": 0.0001}
         loss_dict = {
-            "rec_loss": F.mse_loss(reconstruction_s, x_s),
-            "seg_loss": torch.stack(
-                [
-                    polar_distance(
-                        stable_angle(complex_s[:, i]), complex_t[:, j].detach().angle()
-                    ).mean()
-                    for i in range(num_augments)
-                    for j in range(2)
-                ]
-            ).sum(),
+            "rec_loss": F.mse_loss(x_s, reconstruction_s),
+            "con_loss": dist_loss / batch_size,
         }
 
         loss = sum([v * loss_weights[k] for k, v in loss_dict.items()])
@@ -150,65 +138,143 @@ def mom_train_epoch(
             running_loss, n_div = 0, 0
 
 
-def seg_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
-    image_channels, image_height, image_width, num_clusters = (
+def pat_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **kwargs):
+    image_channels, image_height, image_width, num_augments = (
         kwargs["image_channels"],
         kwargs["image_width"],
         kwargs["image_height"],
-        kwargs["num_clusters"],
+        kwargs["num_augments"],
     )
 
-    segment = kwargs["segm_head"]
+    queue_len = 20
+    num_negatives = 100
+    temperature = 0.1
+    mask_ratio = 0.005
 
-    model.eval()
-    segment.train()
+    model.train()
     running_loss, n_div = 0, 0
 
-    base_phase = (
-        torch.linspace(0, np.pi * 2, image_width)
-        .repeat(image_channels, image_height, 1)
-        .to(device)
-    )
+    prev_views = torch.zeros(0, image_height, image_width).to(device)
 
     for batch_idx, (x, y) in enumerate(tqdm(dataloader)):
-
-        y = indx_mas_to_hard(y.long().to(device), c_dim=20)
+        x, c, ox = x[0], x[1], x[2]
         batch_size = x.shape[0]
         optimizer.zero_grad()
 
-        phase = base_phase.unsqueeze(0).repeat(batch_size, 1, 1, 1)
+        x = x.to(device).float().flatten(start_dim=0, end_dim=1)
+        c = c.to(device)
 
-        x = x.to(device).float()
-        with torch.no_grad():
-            _, complex_out, _ = model(x, phase=phase)
-        phases = stable_angle(complex_out).mean(dim=1, keepdim=True)
+        if batch_idx < queue_len:
+            with torch.no_grad():
+                reconstruction, complex_out, _ = model(x)
 
-        bin_indices = discrete_phases(complex_out.angle(), num_clusters)
-        bin_indices = soft_mas_to_hard(bin_indices).bool()
+            prev_views = torch.cat((prev_views, complex_out.detach().mean(dim=1)))
+            continue
+        else:
+            reconstruction, complex_out, _ = model(x)
 
-        bin_probas = (
-            segment(phases)
-            .unsqueeze(2)
-            .unsqueeze(2)
-            .repeat(1, 1, image_height, image_width, 1)
-        )
+            prev_views = torch.cat((prev_views, complex_out.detach().mean(dim=1)))
 
-        segmentation = (
-            bin_probas.flatten(end_dim=3)[bin_indices.flatten()]
-            .view(batch_size, image_height, image_width, 20)
-            .permute(0, 3, 1, 2)
-        )
+        chw = (image_channels, image_height, image_width)
+        x = x.view(batch_size, num_augments * 2, *chw)
+        reconstruction = reconstruction.view(batch_size, num_augments * 2, *chw)
+        complex_out = complex_out.view(batch_size, num_augments * 2, *chw).mean(dim=2)
 
-        segmentation_hard = soft_mas_to_hard(segmentation)
+        dist_loss = 0
 
-        seg_loss = 0
-        for i in range(batch_size):
-            idx = bipartite_mask_matching(segmentation_hard[i].cpu(), y[i].cpu())
+        for i in range(0, num_augments * 2, 2):
+            j = i + 1
 
-            seg_loss += F.binary_cross_entropy(segmentation[i], y[i][idx])
+            # Extract top left crop coordinates for t and s crops
+            si1, sj1 = c[:, i, 0], c[:, i, 1]
+            ti1, tj1 = c[:, j, 0], c[:, j, 1]
 
-        loss_weights = {"seg_loss": 1}
-        loss_dict = {"seg_loss": seg_loss / batch_size}
+            # Compute bottom right crop doordinates for t and s crops
+            si2, sj2 = si1 + image_height // 2, sj1 + image_width // 2
+            ti2, tj2 = ti1 + image_height // 2, tj1 + image_width // 2
+
+            # Compute top left and bottom right crop
+            # overlap coordinates between t and s
+            oi1, oj1 = torch.max(ti1, si1), torch.max(tj1, sj1)
+            oi2, oj2 = torch.min(ti2, si2), torch.min(tj2, sj2)
+
+            # Project overlap coordinates onto s crop
+            soi1, soj1 = oi1 - si1, oj1 - sj1
+            soi2, soj2 = ((oi2 - si1) * 2 - 1).long(), ((oj2 - sj1) * 2 - 1).long()
+
+            # Project overlap coordinates onto t crop
+            toi1, toj1 = oi1 - ti1, oj1 - tj1
+            toi2, toj2 = ((oi2 - ti1) * 2 - 1).long(), ((oj2 - tj1) * 2 - 1).long()
+
+            logits = torch.zeros(batch_size, num_negatives + 1).to(device)
+
+            for k in range(batch_size):
+                sp_slice2 = stable_angle(
+                    complex_out[
+                        k,
+                        i,
+                        soi1[k].item() * 2 : soi2[k].item(),
+                        soj1[k].item() * 2 : soj2[k].item(),
+                    ]
+                ).flatten()
+
+                tp_slice = stable_angle(
+                    complex_out[
+                        k,
+                        j,
+                        toi1[k].item() * 2 : toi2[k].item(),
+                        toj1[k].item() * 2 : toj2[k].item(),
+                    ]
+                ).flatten()
+
+                # topk = int(len(sp_slice) * mask_ratio)
+
+                # mask = torch.zeros_like(sp_slice)
+                # dist = cos_distance(sp_slice, sp_slice.mean()) / 2 + 0.5
+                # mask[torch.topk(dist, topk, largest=False).indices] = 1
+
+                mask = (
+                    torch.FloatTensor(sp_slice.shape).to(device).uniform_() < mask_ratio
+                )
+
+                mask_norm = mask.sum()
+
+                logits[k, 0] = (
+                    (cos_similarity(sp_slice, tp_slice.detach()) * mask).sum()
+                    / mask_norm
+                    / temperature
+                )
+
+            m = np.random.randint(0, len(prev_views), size=batch_size * num_negatives)
+
+            pred = (
+                stable_angle(complex_out[:, i])
+                .unsqueeze(1)
+                .repeat(1, num_negatives, 1, 1)
+            )
+
+            targ = stable_angle(prev_views[m]).view(
+                batch_size, num_negatives, image_height, image_width
+            )
+
+            mask = torch.FloatTensor(pred.shape).to(device).uniform_() < mask_ratio
+            mask_norm = mask.sum(dim=-1).sum(dim=-1)
+
+            logits[:, 1:] = (
+                (cos_similarity(pred, targ) * mask).sum(dim=-1).sum(dim=-1)
+                / mask_norm
+                / temperature
+            )
+
+            dist_loss += -torch.log(F.softmax(logits, dim=1)[:, 0]).mean()
+
+        prev_views = prev_views[batch_size * num_augments * 2 :]
+
+        loss_weights = {"rec_loss": 1, "con_loss": 0.00001}
+        loss_dict = {
+            "rec_loss": F.mse_loss(x, reconstruction),
+            "con_loss": dist_loss / num_augments,
+        }
 
         loss = sum([v * loss_weights[k] for k, v in loss_dict.items()])
         loss.backward()
@@ -235,38 +301,44 @@ def seg_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
 
 @torch.no_grad()
 def eval_epoch(model, dataloader, device, epoch, logger=None, **kwargs):
-    image_channels, image_height, image_width, num_clusters = (
+    image_channels, image_height, image_width, = (
         kwargs["image_channels"],
         kwargs["image_width"],
         kwargs["image_height"],
-        kwargs["num_clusters"],
     )
 
     model.eval()
 
-    base_phase = (
-        torch.linspace(0, np.pi * 2, image_width)
-        .repeat(image_channels, image_height, 1)
-        .to(device)
-    )
-
     for batch_idx, (x, y) in enumerate(dataloader):
         batch_size = x.shape[0]
 
-        phase = base_phase.unsqueeze(0).repeat(batch_size, 1, 1, 1)
-
         x = x.to(device).float()
-        reconstruction, complex_out, complex_components = model(x, phase=phase)
+        reconstruction, complex_out, complex_components = model(x)
 
-        complex_out_adj = model.phase_collapse(
-            complex_components[0], complex_components[1] - phase
-        )
+        # cluster_lab = apply_kmeans(complex_out, num_clusters=20)
+
+        # fig = plt.figure()
+        # idx = 1
+
+        # for bkl in range(batch_size):
+        #     fig.add_subplot(batch_size, 3, idx)
+        #     plt.imshow(x[bkl].permute(1, 2, 0).numpy())
+        #     idx += 1
+
+        #     fig.add_subplot(batch_size, 3, idx)
+        #     plt.imshow(CMAP((complex_out.angle()[bkl].mean(dim=0).numpy() + np.pi) / (2 * np.pi)))
+        #     idx += 1
+
+        #     fig.add_subplot(batch_size, 3, idx)
+        #     plt.imshow(cluster_lab[bkl])
+        #     idx += 1
+        # plt.show()
 
         if logger != None and batch_idx == 0:
             clusters = torch.zeros(batch_size, 1, image_height, image_width)
 
             if len(y.shape) != 4:
-                cluster_lab, _ = apply_kmeans(complex_out, n_clusters=num_clusters)
+                cluster_lab = apply_kmeans(complex_out, n_clusters=5)
                 cluster_lab = torch.tensor(cluster_lab).float()
             else:
                 cluster_lab = y / float(y.max())
@@ -294,24 +366,43 @@ def eval_epoch(model, dataloader, device, epoch, logger=None, **kwargs):
 
             break
         else:
-            pha = complex_out.angle()
-            pha_adj = complex_out_adj.angle()
+            # fig = plt.figure()
+            # idx = 1
 
-            fig = plt.figure()
-            idx = 1
+            # for k in range(batch_size):
+            #     fig.add_subplot(batch_size, 3, idx)
+            #     plt.imshow(x[k].cpu().permute(1, 2, 0))
+            #     idx += 1
 
-            for i in range(batch_size):
-                fig.add_subplot(batch_size, 3, idx)
-                plt.imshow(x[i].numpy().transpose(1, 2, 0))
-                idx += 1
+            #     fig.add_subplot(batch_size, 3, idx)
+            #     plt.imshow(reconstruction[k].cpu().permute(1, 2, 0))
+            #     idx += 1
 
-                fig.add_subplot(batch_size, 3, idx)
-                plt.imshow(CMAP((pha[i].mean(dim=0) + np.pi) / (2 * np.pi)))
-                idx += 1
+            #     fig.add_subplot(batch_size, 3, idx)
+            #     plt.imshow(
+            #         CMAP(
+            #             (complex_out[k].angle().mean(dim=0).cpu() + np.pi) / (2 * np.pi)
+            #         )
+            #     )
+            #     idx += 1
 
-                fig.add_subplot(batch_size, 3, idx)
-                plt.imshow(CMAP((pha_adj[i].mean(dim=0) + np.pi) / (2 * np.pi)))
-                idx += 1
+            # #     fig.add_subplot(batch_size, 6, idx)
+            # #     plt.imshow(
+            # #         CMAP((complex_out[k].angle()[0].cpu() + np.pi) / (2 * np.pi))
+            # #     )
+            # #     idx += 1
 
-            plt.show()
+            # #     fig.add_subplot(batch_size, 6, idx)
+            # #     plt.imshow(
+            # #         CMAP((complex_out[k].angle()[1].cpu() + np.pi) / (2 * np.pi))
+            # #     )
+            # #     idx += 1
+
+            # #     fig.add_subplot(batch_size, 6, idx)
+            # #     plt.imshow(
+            # #         CMAP((complex_out[k].angle()[2].cpu() + np.pi) / (2 * np.pi))
+            # #     )
+            # #     idx += 1
+
+            # plt.show()
             break

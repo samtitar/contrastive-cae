@@ -43,29 +43,6 @@ def complex_tensor_to_real(complex_tensor, dim=-1):
     return torch.stack([complex_tensor.real, complex_tensor.imag], dim=dim)
 
 
-def tensor_to_numpy(input_tensor):
-    return input_tensor.detach().cpu().numpy()
-
-
-def clip_and_rescale(input_tensor, clip_value):
-    if torch.is_tensor(input_tensor):
-        clipped = torch.clamp(input_tensor, min=0, max=clip_value)
-    elif isinstance(input_tensor, np.ndarray):
-        clipped = np.clip(input_tensor, a_min=0, a_max=clip_value)
-    else:
-        raise NotImplementedError
-
-    return clipped * (1 / clip_value)
-
-
-def get_complex_number(magnitude, phase):
-    return magnitude * torch.exp(phase * 1j)
-
-
-def complex_tensor_to_real(complex_tensor, dim=-1):
-    return torch.stack([complex_tensor.real, complex_tensor.imag], dim=dim)
-
-
 def stable_angle(x, eps=1e-8):
     """Function to ensure that the gradients of .angle() are well behaved."""
     imag = x.imag
@@ -162,8 +139,7 @@ class ComplexBatchNorm2d(nn.Module):
         self.batchnorm = nn.BatchNorm2d(in_channels, affine=True)
 
     def forward(self, m: torch.FloatTensor, phi: torch.FloatTensor):
-        m = self.batchnorm(m)
-        return m, phi
+        return self.batchnorm(m), phi
 
 
 class ComplexLayerNorm(nn.Module):
@@ -211,31 +187,6 @@ class ComplexPhaseCollapse(nn.Module):
         b, c, h, w = phi.shape
 
         phi = stable_angle(get_complex_number(m, phi).mean(dim=1))
-
-        # # Magnitude-WeightedAvgPooling
-        # phi = (m * phi).sum(dim=1) / (m.sum(dim=1) + 1e-8)
-
-        # # Magnitude-SoftmaxPooling
-        # phi = (F.softmax(m, dim=1) * phi).sum(dim=1)
-
-        # # Magnitude-HardmaxPooling
-        # phi = (F.gumbel_softmax(m, dim=1, hard=True) * phi).sum(dim=1)
-
-        # # Magnitude-MaxPooling
-        # idx = torch.argmax(m, dim=1)
-        # print(idx.min(), idx.max())
-        # print(idx.flatten(start_dim=1).shape, phi.flatten(start_dim=2).shape)
-
-        # idx_f, phi_f = idx.flatten(start_dim =1), phi.flatten(start_dim=2)
-
-        # phi = (
-        #     phi.flatten(start_dim=2)
-        #     .gather(dim=1, index=idx.flatten(start_dim=1))
-        #     .view_as(idx)
-        # )
-
-        # # Phase-AvgPooling
-        # phi = phi.mean(dim=1)
 
         if len(phi.shape) == 3:
             phi = phi.unsqueeze(1)

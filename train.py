@@ -11,8 +11,8 @@ import torch.nn as nn
 
 import torchvision
 
-from data_utils.transforms import DataAugmentationMoCAE
-from models.cae.ComplexAutoEncoder import ComplexAutoEncoder, SegmentationHead
+from models.cae.ComplexAutoEncoder import ComplexAutoEncoder
+from data_utils.transforms import DataAugmentationMomCAE, DataAugmentationPatCAE
 
 
 def parse_args():
@@ -31,18 +31,21 @@ def parse_args():
     parser.add_argument("--image-height", default=224, type=int)
     parser.add_argument("--image-width", default=224, type=int)
     parser.add_argument("--num-features", default=1024, type=int)
-    parser.add_argument("--num-clusters", default=100, type=int)
+    parser.add_argument("--num-segments", default=20, type=int)
+    parser.add_argument("--mag-enhance", default=0.1, type=float)
 
     # Training settings
-    parser.add_argument("--training-type", default="pre", choices=["pre", "mom", "seg"])
+    parser.add_argument("--training-type", default="pre", choices=["pre", "mom", "pat"])
     parser.add_argument("--dataset", default="StanfordCars", type=str)
     parser.add_argument("--dataset-root", default="datasets")
     parser.add_argument("--epochs", default=1000, type=int)
     parser.add_argument("--lr", default=0.0001, type=float)
     parser.add_argument("--teacher-momentum", default=0.996, type=float)
-    parser.add_argument("--student-augments", default=8, type=int)
+    parser.add_argument("--num-augments", default=8, type=int)
     parser.add_argument("--train-batch-size", default=32, type=int)
     parser.add_argument("--eval-batch-size", default=32, type=int)
+    parser.add_argument("--dataset-size", default=1.0, type=float)
+    parser.add_argument("--train-segnet", default="false", type=str2bool)
 
     # Data/machine settings
     parser.add_argument("--wandb-project", default=None)
@@ -76,7 +79,7 @@ if __name__ == "__main__":
         args.image_height,
         args.image_width,
         args.num_features,
-        args.num_clusters,
+        args.mag_enhance,
     )
 
     if args.checkpoint_path != None:
@@ -85,13 +88,6 @@ if __name__ == "__main__":
     model.to(device)
 
     print(sum(p.numel() for p in model.parameters() if p.requires_grad))
-    print(
-        [
-            param.data
-            for name, param in model.named_parameters()
-            if name == "output_model.0.bias"
-        ]
-    )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
@@ -100,23 +96,34 @@ if __name__ == "__main__":
         torchvision.transforms.Resize((args.image_height, args.image_width)),
     ]
 
+    targ_transforms_list = [
+        torchvision.transforms.ToTensor(),
+        torchvision.transforms.Resize((args.image_height, args.image_width)),
+    ]
+
     if args.training_type == "pre":
         train_transforms_list = [
-            torchvision.transforms.AutoAugment(
-                torchvision.transforms.AutoAugmentPolicy.IMAGENET
-            ),
             torchvision.transforms.ToTensor(),
             torchvision.transforms.Resize((args.image_height, args.image_width)),
+            torchvision.transforms.RandomHorizontalFlip(p=0.5),
         ]
     elif args.training_type == "mom":
         train_transforms_list = [
-            DataAugmentationMoCAE(args.student_augments),
-            torchvision.transforms.Resize((args.image_height, args.image_width)),
+            DataAugmentationMomCAE(
+                args.num_augments, args.image_height, args.image_width
+            ),
         ]
-    elif args.training_type == "seg":
+    elif args.training_type == "pat":
         train_transforms_list = [
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Resize((args.image_height, args.image_width)),
+            DataAugmentationPatCAE(
+                args.num_augments, args.image_height, args.image_width
+            ),
+        ]
+    elif args.training_type == "lat":
+        train_transforms_list = [
+            DataAugmentationLatCAE(
+                args.num_augments, args.image_height, args.image_width
+            ),
         ]
 
     if args.image_channels == 1:
@@ -125,6 +132,7 @@ if __name__ == "__main__":
 
     train_transforms = torchvision.transforms.Compose(train_transforms_list)
     eval_transforms = torchvision.transforms.Compose(eval_transforms_list)
+    targ_transforms = torchvision.transforms.Compose(targ_transforms_list)
 
     tsk = {"root": args.dataset_root}
     esk = {"root": args.dataset_root}
@@ -146,19 +154,28 @@ if __name__ == "__main__":
         tsk["root"] = f"{args.dataset_root}/train2017"
         esk["root"] = f"{args.dataset_root}/val2017"
 
-        tsk["target_transform"] = lambda x: 1
-        esk["target_transform"] = lambda x: 1
+        tsk["target_transform"] = targ_transforms
+        esk["target_transform"] = targ_transforms
     elif args.dataset == "CelebAMaskHQ":
         ds_source = custom_datasets
         tsk["partition"] = "train"
         esk["partition"] = "val"
+
+        tsk["target_transform"] = targ_transforms
+        esk["target_transform"] = targ_transforms
     elif args.dataset == "CLEVRMask":
         ds_source = custom_datasets
         tsk["partition"] = "train"
         esk["partition"] = "test"
 
+        tsk["target_transform"] = targ_transforms
+        esk["target_transform"] = targ_transforms
+
     train_set = getattr(ds_source, args.dataset)(transform=train_transforms, **tsk)
     eval_set = getattr(ds_source, args.dataset)(transform=eval_transforms, **esk)
+
+    train_set_len = int(len(train_set) * args.dataset_size)
+    train_set = custom_datasets.ResizedDataset(train_set, train_set_len)
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -204,7 +221,6 @@ if __name__ == "__main__":
             args.image_height,
             args.image_width,
             args.num_features,
-            args.num_clusters,
         )
 
         teacher.load_state_dict(model.state_dict())
@@ -215,14 +231,9 @@ if __name__ == "__main__":
 
         tkwargs["teacher"] = teacher
         tkwargs["teacher_momentum"] = args.teacher_momentum
-        tkwargs["num_augments"] = args.student_augments
-    elif args.training_type == "seg":
-        seghead = SegmentationHead(
-            args.image_height, args.image_width, args.num_clusters, 20
-        )
-        seghead.to(device)
-
-        tkwargs["segm_head"] = seghead
+        tkwargs["num_augments"] = args.num_augments
+    elif args.training_type == "pat":
+        tkwargs["num_augments"] = args.num_augments
 
     for epoch in range(args.epochs):
         engine.eval_epoch(
@@ -235,7 +246,6 @@ if __name__ == "__main__":
             image_channels=args.image_channels,
             image_height=args.image_height,
             image_width=args.image_width,
-            num_clusters=args.num_clusters,
         )
 
         getattr(engine, f"{args.training_type}_train_epoch")(
@@ -249,7 +259,6 @@ if __name__ == "__main__":
             image_channels=args.image_channels,
             image_height=args.image_height,
             image_width=args.image_width,
-            num_clusters=args.num_clusters,
             **tkwargs,
         )
 

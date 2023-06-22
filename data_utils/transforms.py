@@ -48,6 +48,27 @@ class RandomResizedCrop(transforms.RandomResizedCrop):
         return torch.tensor([i, j, h, w]), img
 
 
+class RandomCrop(transforms.RandomCrop):
+    def forward(self, img):
+        if self.padding is not None:
+            img = F.pad(img, self.padding, self.fill, self.padding_mode)
+
+        _, height, width = F.get_dimensions(img)
+        # pad the width if needed
+        if self.pad_if_needed and width < self.size[1]:
+            padding = [self.size[1] - width, 0]
+            img = F.pad(img, padding, self.fill, self.padding_mode)
+
+        # pad the height if needed
+        if self.pad_if_needed and height < self.size[0]:
+            padding = [0, self.size[0] - height]
+            img = F.pad(img, padding, self.fill, self.padding_mode)
+
+        i, j, h, w = self.get_params(img, self.size)
+
+        return F.crop(img, i, j, h, w), torch.tensor([i, j, h, w])
+
+
 class RandomGaussianBlur:
     def __init__(self, p=0.5, radius_min=0.1, radius_max=2.0):
         self.prob = p
@@ -74,50 +95,82 @@ class RandomSolarization:
         return img
 
 
-class DataAugmentationMoCAE:
-    def __init__(self, student_augment_number):
-        flip_and_color_jitter = transforms.Compose(
-            [
-                transforms.RandomApply(
-                    [
-                        transforms.ColorJitter(
-                            brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1
-                        )
-                    ],
-                    p=0.8,
-                ),
-                transforms.RandomGrayscale(p=0.2),
-            ]
-        )
-
+class DataAugmentationMomCAE:
+    def __init__(self, augment_number, image_height, image_width):
         self.teacher1 = transforms.Compose(
-            [flip_and_color_jitter, RandomGaussianBlur(1.0), transforms.ToTensor()]
+            [
+                transforms.ColorJitter(hue=0.3),
+                RandomGaussianBlur(1.0),
+                transforms.ToTensor(),
+            ]
         )
 
         self.teacher2 = transforms.Compose(
             [
-                flip_and_color_jitter,
+                transforms.ColorJitter(hue=0.1),
                 RandomGaussianBlur(0.1),
-                RandomSolarization(0.2),
                 transforms.ToTensor(),
             ]
         )
 
-        self.student_augment_number = student_augment_number
+        self.augment_number = augment_number
         self.student = transforms.Compose(
             [
-                flip_and_color_jitter,
+                transforms.ColorJitter(hue=0.2),
                 RandomGaussianBlur(0.5),
-                RandomSolarization(0.5),
                 transforms.ToTensor(),
             ]
         )
 
-    def __call__(self, image):
-        result = []
-        result.append(self.teacher1(image))
-        result.append(self.teacher2(image))
+        self.totensor = transforms.ToTensor()
+        self.resize = transforms.Resize((image_height, image_width))
 
-        for _ in range(self.student_augment_number):
-            result.append(self.student(image))
-        return torch.stack(result)
+    def __call__(self, image):
+        imgs, params = [], []
+        t1_img = self.teacher1(image)
+        t2_img = self.teacher1(image)
+
+        imgs.append(self.resize(t1_img))
+        imgs.append(self.resize(t2_img))
+
+        for _ in range(self.augment_number):
+            im = self.student(image)
+
+            imgs.append(self.resize(im))
+        return torch.stack(imgs), self.totensor(image)
+
+
+class DataAugmentationPatCAE:
+    def __init__(self, augment_number, image_height, image_width):
+        self.augment_number = augment_number
+        self.augment = transforms.Compose(
+            [
+                RandomGaussianBlur(0.5),
+                transforms.ToTensor(),
+                transforms.ColorJitter(brightness=0.1, contrast=0.1),
+                RandomCrop((image_height // 2, image_width // 2)),
+            ]
+        )
+
+        self.image_width, self.image_height = image_width, image_height
+
+        self.totensor = transforms.ToTensor()
+        self.resize = transforms.Resize((image_height, image_width))
+
+    def __call__(self, image):
+        imgs, params = [], []
+        for _ in range(self.augment_number):
+            im, pa = self.augment(image)
+
+            randi = random.randint(-self.image_height // 6, self.image_height // 6)
+            randj = random.randint(-self.image_width // 6, self.image_width // 6)
+
+            pa2 = pa + torch.tensor([randi, randj, 0, 0])
+            im2 = F.crop(self.totensor(image), pa2[0], pa2[1], pa2[2], pa2[3])
+
+            imgs.append(self.resize(im))
+            params.append(pa)
+
+            imgs.append(self.resize(im2))
+            params.append(pa2)
+        return torch.stack(imgs), torch.stack(params), self.totensor(image)

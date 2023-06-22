@@ -1,17 +1,17 @@
-name: cae-contrastive
+name: contrastive-cae
 channels:
   - defaults
 dependencies:
-  - torchvision
-  - pytorch
   - tqdm
   - matplotlib
   - scipy
   - scikit-learn
   - scikit-image
+  - pip
   - pip:
-    - einops
     - wandb
-    - torchmetrics
+    - torch
+    - einops
     - argparse
     - pycocotools
+    - torchvision

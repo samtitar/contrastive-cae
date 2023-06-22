@@ -4,10 +4,7 @@ import torch.nn.functional as F
 
 import numpy as np
 
-from einops import rearrange
-
-from models.cae import ComplexLayers as ComplexLayers
-from torchvision.transforms.functional import resize
+from models.cae import ComplexLayers
 
 
 class ComplexLin(nn.Module):
@@ -39,7 +36,7 @@ class Lin(nn.Module):
         self.activation = activation
 
         self.linear = nn.Linear(in_channels, out_channels)
-        # self.layernorm = nn.LayerNorm(out_channels)
+        self.layernorm = nn.LayerNorm(out_channels)
 
         if activation == "relu":
             self.activation_func = nn.ReLU()
@@ -48,7 +45,7 @@ class Lin(nn.Module):
 
     def forward(self, x):
         y = self.linear(x)
-        # y = self.layernorm(y)
+        y = self.layernorm(y)
         if self.activation != None:
             y = self.activation_func(y)
         return y
@@ -142,6 +139,24 @@ class ComplexConvDBlock3(nn.Module):
         return self.maxpool(z) + (tuple(z.shape[2:]),)
 
 
+class ComplexConvDBlock4(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+
+        self.conv1 = ComplexConv(in_channels, out_channels, 3, 1, 1)
+        self.conv2 = ComplexConv(out_channels, out_channels, 3, 1, 1)
+        self.conv3 = ComplexConv(out_channels, out_channels, 3, 1, 1)
+        self.conv4 = ComplexConv(out_channels, out_channels, 3, 1, 1)
+        self.maxpool = ComplexLayers.ComplexMaxPool2d((2, 2))
+
+    def forward(self, x):
+        z1 = self.conv1(x)
+        z = self.conv2(z1)
+        z = self.conv3(z)
+        z = self.conv4(z) + z1
+        return self.maxpool(z) + (tuple(z.shape[2:]),)
+
+
 class ComplexConvUBlock2(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
@@ -176,6 +191,26 @@ class ComplexConvUBlock3(nn.Module):
         return self.conv3(z) + z1
 
 
+class ComplexConvUBlock4(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+
+        self.upsample = ComplexLayers.ComplexUpSampling2d()
+        # self.upsample = ComplexLayers.ComplexMaxUnpool2d()
+        self.conv1 = ComplexConv(in_channels, out_channels, 3, 1, 1)
+        self.conv2 = ComplexConv(out_channels, out_channels, 3, 1, 1)
+        self.conv3 = ComplexConv(out_channels, out_channels, 3, 1, 1)
+        self.conv4 = ComplexConv(out_channels, out_channels, 3, 1, 1)
+
+    def forward(self, x, idx, out_shape):
+        # z = self.upsample(x, idx, out_shape)
+        z = self.upsample(x, out_shape)
+        z1 = self.conv1(z)
+        z = self.conv2(z1)
+        z = self.conv3(z)
+        return self.conv4(z) + z1
+
+
 class ComplexAutoEncoder(nn.Module):
     def __init__(
         self,
@@ -183,7 +218,7 @@ class ComplexAutoEncoder(nn.Module):
         in_height: int = 224,
         in_width: int = 224,
         num_features: int = 1024,
-        num_clusters: int = 2,
+        mag_enhance: float = 1,
     ):
         super(ComplexAutoEncoder, self).__init__()
 
@@ -191,13 +226,16 @@ class ComplexAutoEncoder(nn.Module):
         self.in_height = in_height
         self.in_width = in_width
 
-        self.collapse = ComplexLayers.ComplexCollapse()
-
         self.down1 = ComplexConvDBlock2(in_channels, 64)
         self.down2 = ComplexConvDBlock2(64, 128)
         self.down3 = ComplexConvDBlock3(128, 256)
         self.down4 = ComplexConvDBlock3(256, 512)
         self.down5 = ComplexConvDBlock3(512, 512)
+
+        # self.fc1 = ComplexLin(512 * 7 * 7, 4096, activation="relu")
+        # self.fc2 = ComplexLin(4096, 2048, activation="relu")
+        # self.fc3 = ComplexLin(2048, 4096, activation="relu")
+        # self.fc4 = ComplexLin(4096, 512 * 7 * 7, activation="relu")
 
         self.up5 = ComplexConvUBlock3(512, 512)
         self.up4 = ComplexConvUBlock3(512, 256)
@@ -205,19 +243,16 @@ class ComplexAutoEncoder(nn.Module):
         self.up2 = ComplexConvUBlock2(128, 64)
         self.up1 = ComplexConvUBlock2(64, in_channels)
 
+        self.collapse = ComplexLayers.ComplexCollapse()
         self.phase_collapse = ComplexLayers.ComplexPhaseCollapse()
 
-        self.output_model = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, 1, 1),
-        )
-
-        self._init_output_model()
+        self.mag_enhance = mag_enhance
 
     def _init_output_model(self):
         for layer in self.output_model.children():
             if hasattr(layer, "weight"):
                 nn.init.constant_(layer.weight, 1)
-                nn.init.constant_(layer.bias, -0.1)
+                nn.init.constant_(layer.bias, -self.mag_enhance)
 
     def forward(self, x, phase=None):
         b = x.shape[0]
@@ -233,52 +268,36 @@ class ComplexAutoEncoder(nn.Module):
         z, idx4, shape4 = self.down4(z)
         z, idx5, shape5 = self.down5(z)
 
+        # z = self.phase_collapse(z.abs(), ComplexLayers.stable_angle(z))
+
+        # z_shape = z.shape
+        # z = z.flatten(start_dim=1)
+        # z = self.fc1(z)
+        # complex_latent = self.fc2(z)
+        # z = self.fc3(complex_latent)
+        # z = self.fc4(z)
+        # z = z.view(z_shape)
+
         # Deocde features
         z = self.up5(z, idx5, shape5)
         z = self.up4(z, idx4, shape4)
         z = self.up3(z, idx3, shape3)
         z = self.up2(z, idx2, shape2)
+
         z = self.up1(z, idx1, shape1)
 
         complex_output = self.phase_collapse(
-            z.abs() + 0.1, ComplexLayers.stable_angle(z)
+            z.abs() + self.mag_enhance, ComplexLayers.stable_angle(z)
         )
 
+        # complex_output = z
+
         # Reconstruct from magnitudes and cluster from phases
-        reconstruction = self.output_model(complex_output.abs()).sigmoid()
+        # reconstruction = self.output_model(complex_output.abs()).sigmoid()
+        reconstruction = complex_output.abs()
+
         return (
             reconstruction,
             complex_output,
-            (z.abs() + 0.1, ComplexLayers.stable_angle(z)),
+            (z.abs() + self.mag_enhance, ComplexLayers.stable_angle(z)),
         )
-
-
-class SegmentationHead(nn.Module):
-    def __init__(self, image_height, image_width, num_clusters, num_segments):
-        super().__init__()
-
-        self.num_clusters = num_clusters
-        self.num_segments = num_segments
-
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=3)
-        self.conv2 = nn.Conv2d(64, 128, kernel_size=3)
-        self.conv3 = nn.Conv2d(128, 256, kernel_size=3)
-        self.conv4 = nn.Conv2d(256, 256, kernel_size=3)
-
-        x = torch.zeros(1, 1, image_height, image_width)
-        x = F.max_pool2d(self.conv1(x).relu(), (3, 3))
-        x = F.max_pool2d(self.conv2(x).relu(), (3, 3))
-        x = F.max_pool2d(self.conv3(x).relu(), (2, 2))
-        x = F.max_pool2d(self.conv4(x).relu(), (2, 2))
-        fw, fh = x.shape[2:]
-
-        self.fc = nn.Linear(256 * fh * fw, num_clusters * num_segments)
-
-    def forward(self, x):
-        x = F.max_pool2d(self.conv1(x).relu(), (3, 3))
-        x = F.max_pool2d(self.conv2(x).relu(), (3, 3))
-        x = F.max_pool2d(self.conv3(x).relu(), (2, 2))
-        x = F.max_pool2d(self.conv4(x).relu(), (2, 2))
-
-        x = self.fc(x.flatten(start_dim=1))
-        return x.view(-1, self.num_clusters, self.num_segments).softmax(dim=-1)
