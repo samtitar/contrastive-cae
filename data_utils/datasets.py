@@ -56,7 +56,8 @@ class Tetrominoes(torch.utils.data.Dataset):
         img = Image.fromarray(
             torch.nn.functional.interpolate(
                 torch.tensor(img).permute(2, 0, 1).unsqueeze(0).float(), (512, 512)
-            )[0].long()
+            )[0]
+            .long()
             .permute(1, 2, 0)
             .numpy()
             .astype(np.uint8)
@@ -65,7 +66,8 @@ class Tetrominoes(torch.utils.data.Dataset):
         lab = Image.fromarray(
             torch.nn.functional.interpolate(
                 torch.tensor(lab).unsqueeze(0).unsqueeze(0).float(), (512, 512)
-            )[0, 0].long()
+            )[0, 0]
+            .long()
             .numpy()
             .astype(np.uint8)
         )
@@ -116,31 +118,23 @@ class CelebAMaskHQ:
 class CLEVRMask:
     def __init__(self, root, transform, target_transform, partition):
         self.img_path = f"{root}/{partition}_images"
-        self.label_path = f"{root}/{partition}_labels"
+        self.lab_path = f"{root}/{partition}_labels"
+
         self.transform_img = transform
         self.transform_label = target_transform
         self.set = []
+
         self.preprocess()
 
         self.num_images = len(self.set) - 1
 
     def preprocess(self):
-
-        for i in range(
-            len(
-                [
-                    name
-                    for name in os.listdir(self.img_path)
-                    if os.path.isfile(os.path.join(self.img_path, name))
-                ]
-            )
-        ):
-            img_path = os.path.join(self.img_path, str(i + 1) + ".png")
-            # label_path = os.path.join(self.label_path, str(i) + ".png")
-            label_path = os.path.join(self.img_path, str(i + 1) + ".png")
-            self.set.append([img_path, label_path])
-
-        print("Finished preprocessing the CelebA dataset...")
+        for name in os.listdir(self.img_path):
+            if os.path.isfile(os.path.join(self.img_path, name)):
+                img_path = os.path.join(self.img_path, name)
+                lab_path = os.path.join(self.lab_path, name)
+                self.set.append((img_path, lab_path))
+        print("Finished preprocessing the CLEVR dataset...")
 
     def __getitem__(self, index):
         img_path, label_path = self.set[index]

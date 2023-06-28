@@ -83,8 +83,8 @@ def mom_train_epoch(
         x_s = x[:, 2:].to(device).float().flatten(start_dim=0, end_dim=1)
 
         with torch.no_grad():
-            reconstruction_t, complex_t, _ = teacher(x_t)
-        reconstruction_s, complex_s, _ = student(x_s)
+            reconstruction_t, complex_t = teacher(x_t)
+        reconstruction_s, complex_s = student(x_s)
 
         chw = (image_channels, image_height, image_width)
 
@@ -166,13 +166,11 @@ def pat_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
 
         if batch_idx < queue_len:
             with torch.no_grad():
-                reconstruction, complex_out, _ = model(x)
-
+                reconstruction, complex_out = model(x)
             prev_views = torch.cat((prev_views, complex_out.detach().mean(dim=1)))
             continue
         else:
-            reconstruction, complex_out, _ = model(x)
-
+            reconstruction, complex_out = model(x)
             prev_views = torch.cat((prev_views, complex_out.detach().mean(dim=1)))
 
         chw = (image_channels, image_height, image_width)
@@ -313,26 +311,7 @@ def eval_epoch(model, dataloader, device, epoch, logger=None, **kwargs):
         batch_size = x.shape[0]
 
         x = x.to(device).float()
-        reconstruction, complex_out, complex_components = model(x)
-
-        # cluster_lab = apply_kmeans(complex_out, num_clusters=20)
-
-        # fig = plt.figure()
-        # idx = 1
-
-        # for bkl in range(batch_size):
-        #     fig.add_subplot(batch_size, 3, idx)
-        #     plt.imshow(x[bkl].permute(1, 2, 0).numpy())
-        #     idx += 1
-
-        #     fig.add_subplot(batch_size, 3, idx)
-        #     plt.imshow(CMAP((complex_out.angle()[bkl].mean(dim=0).numpy() + np.pi) / (2 * np.pi)))
-        #     idx += 1
-
-        #     fig.add_subplot(batch_size, 3, idx)
-        #     plt.imshow(cluster_lab[bkl])
-        #     idx += 1
-        # plt.show()
+        reconstruction, complex_out = model(x)
 
         if logger != None and batch_idx == 0:
             clusters = torch.zeros(batch_size, 1, image_height, image_width)

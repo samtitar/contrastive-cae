@@ -30,9 +30,6 @@ def parse_args():
     parser.add_argument("--image-channels", default=1, type=int)
     parser.add_argument("--image-height", default=224, type=int)
     parser.add_argument("--image-width", default=224, type=int)
-    parser.add_argument("--num-features", default=1024, type=int)
-    parser.add_argument("--num-segments", default=20, type=int)
-    parser.add_argument("--mag-enhance", default=0.1, type=float)
 
     # Training settings
     parser.add_argument("--training-type", default="pre", choices=["pre", "mom", "pat"])
@@ -40,12 +37,10 @@ def parse_args():
     parser.add_argument("--dataset-root", default="datasets")
     parser.add_argument("--epochs", default=1000, type=int)
     parser.add_argument("--lr", default=0.0001, type=float)
-    parser.add_argument("--teacher-momentum", default=0.996, type=float)
-    parser.add_argument("--num-augments", default=8, type=int)
+    parser.add_argument("--num-augments", default=1, type=int)
     parser.add_argument("--train-batch-size", default=32, type=int)
     parser.add_argument("--eval-batch-size", default=32, type=int)
     parser.add_argument("--dataset-size", default=1.0, type=float)
-    parser.add_argument("--train-segnet", default="false", type=str2bool)
 
     # Data/machine settings
     parser.add_argument("--wandb-project", default=None)
@@ -78,8 +73,6 @@ if __name__ == "__main__":
         args.image_channels,
         args.image_height,
         args.image_width,
-        args.num_features,
-        args.mag_enhance,
     )
 
     if args.checkpoint_path != None:
@@ -116,12 +109,6 @@ if __name__ == "__main__":
     elif args.training_type == "pat":
         train_transforms_list = [
             DataAugmentationPatCAE(
-                args.num_augments, args.image_height, args.image_width
-            ),
-        ]
-    elif args.training_type == "lat":
-        train_transforms_list = [
-            DataAugmentationLatCAE(
                 args.num_augments, args.image_height, args.image_width
             ),
         ]

@@ -1,4 +1,6 @@
 __pycache__/
 datasets/
+figures/
 wandb/
 *.pt
+*.ipynb

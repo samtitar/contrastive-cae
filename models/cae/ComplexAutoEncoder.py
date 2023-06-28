@@ -217,8 +217,6 @@ class ComplexAutoEncoder(nn.Module):
         in_channels: int = 3,
         in_height: int = 224,
         in_width: int = 224,
-        num_features: int = 1024,
-        mag_enhance: float = 1,
     ):
         super(ComplexAutoEncoder, self).__init__()
 
@@ -245,14 +243,6 @@ class ComplexAutoEncoder(nn.Module):
 
         self.collapse = ComplexLayers.ComplexCollapse()
         self.phase_collapse = ComplexLayers.ComplexPhaseCollapse()
-
-        self.mag_enhance = mag_enhance
-
-    def _init_output_model(self):
-        for layer in self.output_model.children():
-            if hasattr(layer, "weight"):
-                nn.init.constant_(layer.weight, 1)
-                nn.init.constant_(layer.bias, -self.mag_enhance)
 
     def forward(self, x, phase=None):
         b = x.shape[0]
@@ -286,18 +276,10 @@ class ComplexAutoEncoder(nn.Module):
 
         z = self.up1(z, idx1, shape1)
 
-        complex_output = self.phase_collapse(
-            z.abs() + self.mag_enhance, ComplexLayers.stable_angle(z)
-        )
-
-        # complex_output = z
-
-        # Reconstruct from magnitudes and cluster from phases
-        # reconstruction = self.output_model(complex_output.abs()).sigmoid()
+        complex_output = self.phase_collapse(z.abs(), ComplexLayers.stable_angle(z))
         reconstruction = complex_output.abs()
 
         return (
             reconstruction,
             complex_output,
-            (z.abs() + self.mag_enhance, ComplexLayers.stable_angle(z)),
         )
