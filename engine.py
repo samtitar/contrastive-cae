@@ -154,6 +154,7 @@ def pat_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
     model.train()
     running_loss, n_div = 0, 0
 
+    # Memory bank
     prev_views = torch.zeros(0, image_height, image_width).to(device)
 
     for batch_idx, (x, y) in enumerate(tqdm(dataloader)):
@@ -164,6 +165,7 @@ def pat_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
         x = x.to(device).float().flatten(start_dim=0, end_dim=1)
         c = c.to(device)
 
+        # Fill up memory bank before optimization
         if batch_idx < queue_len:
             with torch.no_grad():
                 reconstruction, complex_out = model(x)
@@ -173,6 +175,7 @@ def pat_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
             reconstruction, complex_out = model(x)
             prev_views = torch.cat((prev_views, complex_out.detach().mean(dim=1)))
 
+        # Reshape input, reconstruction and output
         chw = (image_channels, image_height, image_width)
         x = x.view(batch_size, num_augments * 2, *chw)
         reconstruction = reconstruction.view(batch_size, num_augments * 2, *chw)
@@ -207,7 +210,7 @@ def pat_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
             logits = torch.zeros(batch_size, num_negatives + 1).to(device)
 
             for k in range(batch_size):
-                sp_slice2 = stable_angle(
+                sp_slice = stable_angle(
                     complex_out[
                         k,
                         i,
@@ -225,12 +228,7 @@ def pat_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
                     ]
                 ).flatten()
 
-                # topk = int(len(sp_slice) * mask_ratio)
-
-                # mask = torch.zeros_like(sp_slice)
-                # dist = cos_distance(sp_slice, sp_slice.mean()) / 2 + 0.5
-                # mask[torch.topk(dist, topk, largest=False).indices] = 1
-
+                # Select random samples from anchor-positive pair
                 mask = (
                     torch.FloatTensor(sp_slice.shape).to(device).uniform_() < mask_ratio
                 )
@@ -243,6 +241,7 @@ def pat_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
                     / temperature
                 )
 
+            # Select random negatives from memory bank
             m = np.random.randint(0, len(prev_views), size=batch_size * num_negatives)
 
             pred = (
@@ -255,6 +254,7 @@ def pat_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
                 batch_size, num_negatives, image_height, image_width
             )
 
+            # Select random samples from anchor-negative pair
             mask = torch.FloatTensor(pred.shape).to(device).uniform_() < mask_ratio
             mask_norm = mask.sum(dim=-1).sum(dim=-1)
 
@@ -264,6 +264,7 @@ def pat_train_epoch(model, dataloader, optimizer, device, epoch, logger=None, **
                 / temperature
             )
 
+            # Compute InfoNCE Loss
             dist_loss += -torch.log(F.softmax(logits, dim=1)[:, 0]).mean()
 
         prev_views = prev_views[batch_size * num_augments * 2 :]
