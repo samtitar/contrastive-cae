@@ -1,0 +1,3 @@
+# Code for Contrastive training of Complex-Valued Autoencoders
+
+The entry point of the codebase is `train.py`. Command-line arguments provide access to hyperparameters and training settings. The main training loop of the CAE is located in `engine.py`. There are three different types of training: `pretraining`, which only optimizes CAE for image reconstruction. `momentum`, which optimizes CAE according to a student-teacher momentum setup. And `patches`, which optimizes CAE according to the crop-shift setup. The training loops for these optimization schemes are `pre_train_epoch`, `mom_train_epoch` and `pat_train_epoch` respectively.
